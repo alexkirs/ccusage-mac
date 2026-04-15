@@ -186,14 +186,18 @@ local FETCH_JS_TEMPLATE = [[
           var u = readQuery("unified_limits_utilization");
           var o = readQuery("overage_spend_limit");
           var a = readQuery("current_account");
-          if (!u) {
-            // The usage query is bound to the settings/usage page; it may
-            // not appear until the user-facing component mounts. Retry.
+          // Retry while the query is absent, still fetching, or has no data
+          // yet. refetchQueries can resolve before the usage component has
+          // mounted its query (Promise.all matches 0 and resolves instantly).
+          var uStatus = u && u.state && u.state.status;
+          var uHasData = !!(u && u.state && u.state.data);
+          if (!u || uStatus === "pending" || uStatus === "fetching" || !uHasData) {
             if (Date.now() < deadline) { setTimeout(doRefetch, 200); return; }
-            window.__cu.lastFetch = {stage:"done", token: TOKEN, err: "unified_limits_utilization not in cache after 6s"};
+            window.__cu.lastFetch = {stage:"done", token: TOKEN,
+              err: "unified_limits_utilization not ready after 6s (status=" + uStatus + " hasData=" + uHasData + ")"};
             return;
           }
-          if (u.state.status === "error") {
+          if (uStatus === "error") {
             window.__cu.lastFetch = {stage:"done", token: TOKEN, err: "unified_limits_utilization state=error: " + String(u.state.error)};
             return;
           }

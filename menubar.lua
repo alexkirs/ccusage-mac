@@ -345,56 +345,107 @@ local function fmtMoney(amount, currency)
   return string.format("%.2f %s", amount, currency)
 end
 
--- Flip the Extra-usage switch via a DOM click in the persistent WV. Only
--- safe for the ON → OFF direction; enabling triggers Anthropic's
--- confirmation modal which can't be interacted with in our invisible view.
--- After the click, refetch in 1 s and again in 2.5 s; if state didn't flip,
--- surface a warning row so the user knows the DOM target moved.
-local DISABLE_EXTRA_JS = [[
+-- Flip Extra usage via a direct PUT to /api/organizations/<uuid>/overage_spend_limit.
+--
+-- Why not the DOM switch: the SPA's visible pill has React handlers that
+-- ignore programmatic events (likely isTrusted=false filtering). Tried
+-- input.click(), label.click(), parent.click(), native-setter + dispatched
+-- change event — none fired the mutation. The JSON endpoint, on the other
+-- hand, accepts PUT with {is_enabled: <bool>} and returns the updated row
+-- (status 200). Session cookies auto-attach via credentials: "include".
+-- After success we prime the React Query cache with qc.setQueryData so the
+-- SPA's own UI reflects the change without waiting on a refetch.
+local TOGGLE_EXTRA_JS_TEMPLATE = [[
 (function(){
+  var TOKEN = "%s";
+  window.__cu = window.__cu || {};
+  window.__cu.lastToggle = {stage:"starting", token: TOKEN};
+
   try {
-    var sw = document.querySelector('input[role="switch"]');
-    if (!sw) return "no_switch";
-    // The extra-usage switch is the only role=switch on /settings/usage today,
-    // but guard anyway by checking the surrounding heading.
-    var node = sw, found = false;
-    for (var i = 0; i < 8 && node; i++) {
-      node = node.parentElement;
-      if (!node) break;
-      var h = node.querySelector("h1,h2,h3,h4");
-      if (h && /extra usage/i.test(h.textContent || "")) { found = true; break; }
-    }
-    if (!found) return "no_extra_usage_heading_near_switch";
-    sw.click();
-    return "clicked:" + (sw.checked === true ? "now_checked" : "now_unchecked");
-  } catch (e) { return "err: " + String(e); }
+    var qc = window.__cu.qc;
+    if (!qc) { window.__cu.lastToggle = {stage:"done", token: TOKEN, err: "no_queryClient"}; return; }
+    var q = qc.getQueryCache().getAll().find(function(q){
+      return q.queryKey && q.queryKey[0] === "overage_spend_limit" && q.queryKey.length === 2;
+    });
+    if (!q) { window.__cu.lastToggle = {stage:"done", token: TOKEN, err: "no_overage_query"}; return; }
+    var orgUuid = q.queryKey[1];
+    var before = q.state && q.state.data && q.state.data.is_enabled;
+    var desired = %s;  // explicit true/false from Lua
+
+    fetch("/api/organizations/" + orgUuid + "/overage_spend_limit", {
+      method: "PUT",
+      headers: {"content-type": "application/json"},
+      credentials: "include",
+      body: JSON.stringify({is_enabled: desired}),
+    }).then(function(r){
+      return r.text().then(function(body){
+        var parsed = null;
+        try { parsed = JSON.parse(body); } catch (e) {}
+        var ok = r.status === 200 && parsed && parsed.is_enabled === desired;
+        window.__cu.lastToggle = {
+          stage: "done", token: TOKEN,
+          ok: ok, status: r.status,
+          before: before, desired: desired,
+          actual: parsed && parsed.is_enabled,
+          bodySnippet: body.slice(0, 200),
+        };
+        if (ok) {
+          try { qc.setQueryData(q.queryKey, parsed); } catch (e) {}
+        }
+      });
+    }).catch(function(e){
+      window.__cu.lastToggle = {stage:"done", token: TOKEN, err: "fetch_err: " + String(e)};
+    });
+  } catch (e) {
+    window.__cu.lastToggle = {stage:"done", token: TOKEN, err: "throw: " + String(e)};
+  }
 })()
 ]]
+local TOGGLE_READ_JS = "JSON.stringify(window.__cu && window.__cu.lastToggle || {stage:'none'})"
 
-local function toggleExtraUsageOff()
-  log.i("toggle extra usage: clicking switch")
-  scraper.runJS(DISABLE_EXTRA_JS, function(result, _)
-    log.i("toggle result: " .. tostring(result))
-    state.log("i", "extra_usage toggle click → " .. tostring(result))
-    if type(result) ~= "string" or not result:find("^clicked", 1) then
-      hs.alert.show("Extra usage toggle: " .. tostring(result))
+local function toggleExtraUsage()
+  local before = state.data.extraUsage and state.data.extraUsage.isEnabled
+  local desired = not before
+  log.i("toggle extra usage: " .. tostring(before) .. " → " .. tostring(desired))
+  local token = string.format("%d_%d", os.time(), math.random(1000000))
+  local js = string.format(TOGGLE_EXTRA_JS_TEMPLATE, token, tostring(desired))
+  scraper.runJS(js, function(_, _) end)
+
+  -- Poll for the PUT result with a 5 s cap.
+  local tries = 0
+  local poll
+  poll = hs.timer.doEvery(0.2, function()
+    tries = tries + 1
+    if tries > 25 then
+      poll:stop()
+      hs.alert.show("Extra usage toggle timed out")
+      state.data.warnings = state.data.warnings or {}
+      table.insert(state.data.warnings, "Extra usage PUT timed out after 5 s")
+      applyTitle()
       return
     end
-    -- Refetch to pick up the new state, then verify.
-    local expectedDisabled = state.data.extraUsage and state.data.extraUsage.isEnabled
-    refresh()
-    hs.timer.doAfter(2.5, function()
+    scraper.runJS(TOGGLE_READ_JS, function(resultStr, _)
+      if not resultStr then return end
+      local ok, info = pcall(hs.json.decode, resultStr)
+      if not ok or type(info) ~= "table" then return end
+      if info.stage ~= "done" or info.token ~= token then return end
+      poll:stop()
+      log.i("toggle result: " .. hs.inspect(info))
+      state.log("i", "extra_usage PUT → " .. hs.json.encode(info))
+      if not info.ok then
+        hs.alert.show("Extra usage toggle failed (HTTP " .. tostring(info.status or "?") .. ")")
+        state.data.warnings = state.data.warnings or {}
+        table.insert(state.data.warnings,
+          "Extra usage PUT failed: " .. (info.err or ("status=" .. tostring(info.status)))
+          .. " · desired=" .. tostring(desired) .. " · actual=" .. tostring(info.actual))
+        applyTitle()
+        return
+      end
+      -- Optimistic update so the menu reflects the change before the next tick.
+      if state.data.extraUsage then state.data.extraUsage.isEnabled = desired end
+      applyTitle()
+      -- Refetch so utilization / used_credits reflect the new shape too.
       refresh()
-      hs.timer.doAfter(1, function()
-        local eu = state.data.extraUsage
-        if eu and eu.isEnabled == expectedDisabled then
-          -- Nothing changed: the click didn't take effect.
-          hs.alert.show("Extra usage didn't change — try claude.ai directly")
-          state.data.warnings = state.data.warnings or {}
-          table.insert(state.data.warnings, "Disable click didn't flip is_enabled — DOM target may have moved")
-          applyTitle()
-        end
-      end)
     end)
   end)
 end
@@ -452,8 +503,7 @@ local function buildFullMenu()
         disabled = true,
       })
       table.insert(items, { title = "    status: on", disabled = true })
-      -- Disable via DOM click on our persistent WV — safe direction (no modal).
-      table.insert(items, { title = "Disable extra usage", fn = toggleExtraUsageOff })
+      table.insert(items, { title = "Disable extra usage", fn = toggleExtraUsage })
     else
       table.insert(items, { title = "    status: off", disabled = true })
       if eu.monthlyLimit then
@@ -462,12 +512,7 @@ local function buildFullMenu()
           disabled = true,
         })
       end
-      -- Enable requires confirming Anthropic's modal; our WV is invisible, so
-      -- we send the user to their default browser to handle that flow.
-      table.insert(items, {
-        title = "Enable in claude.ai…",
-        fn = function() openUrl(USAGE_URL) end,
-      })
+      table.insert(items, { title = "Enable extra usage", fn = toggleExtraUsage })
     end
   end
 
