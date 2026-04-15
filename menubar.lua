@@ -10,12 +10,11 @@ M.bar = nil
 M.fetchTimer = nil
 M.titleTimer = nil
 
-local FORMATS = { "compact_reset", "compact", "labeled", "verbose" }
+local FORMATS = { "compact_reset", "compact", "labeled" }
 local FORMAT_LABELS = {
   compact_reset = "Compact + 5h reset",
   compact = "Compact",
   labeled = "Labeled",
-  verbose = "Verbose",
 }
 local DEFAULT_FORMAT = "compact_reset"
 
@@ -156,6 +155,17 @@ local function compactStyled(fh, w, tail)
   return st
 end
 
+-- Labeled styled title: "5h62·1w41" — labels neutral gray, numbers
+-- colored per bucket. No leading glyph: the colored bar is already
+-- rendered as the menu bar icon.
+local function labeledStyled(fh, w)
+  return run("5h", NEUTRAL_COLOR)
+      .. run(tostring(fh), colorForUsed(fh))
+      .. run("·", NEUTRAL_COLOR)
+      .. run("1w", NEUTRAL_COLOR)
+      .. run(tostring(w), colorForUsed(w))
+end
+
 local function formatTitle()
   local s = state.data
   if s.status == "needs_login" then return "⚠ login" end
@@ -164,10 +174,7 @@ local function formatTitle()
   local fh = s.fiveHour and s.fiveHour.percentUsed or "?"
   local w = s.weekly and s.weekly.percentUsed or "?"
   local fmt = get("format", DEFAULT_FORMAT)
-  -- Labeled / verbose retain the in-text glyph for now (the icon shows alongside).
-  local g = glyph()
-  if fmt == "labeled" then return string.format("%s 5h·%s 1w·%s", g, fh, w) end
-  if fmt == "verbose" then return string.format("%s 5h %s%% · 1w %s%% used", g, fh, w) end
+  if fmt == "labeled" then return labeledStyled(fh, w) end
   if fmt == "compact_reset" then
     return compactStyled(fh, w, fiveHourResetClock(s) or "—")
   end
