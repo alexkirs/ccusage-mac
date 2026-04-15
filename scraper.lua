@@ -492,43 +492,70 @@ end
 -- extra tick to let Set-Cookie persist), we tear the WV down and reset
 -- pageState to "cold" so the next fetch restarts fresh and lands on
 -- /login → needs_login.
+-- POST to claude.ai's real logout API. GET /logout is a client-side SPA
+-- route that just redirects to /login — it does NOT invalidate the
+-- session; the session cookie stays live. Inspecting the SPA bundle
+-- (assets-proxy.anthropic.com/.../index-*.js) confirmed the actual
+-- logout flow the React app uses is:
+--   useMutation('/api/auth/logout', 'POST')
+-- with an empty JSON body. Response is {"success":true} + a Set-Cookie
+-- header that clears the HttpOnly sessionKey. Live-tested from the
+-- persistent WV: before=200 (authed), POST→200 {success:true}, after=403
+-- account_session_invalid. That's what we want.
 function M.logoutSoft(onDone)
-  log.i("logoutSoft: navigating to claude.ai/logout")
+  log.i("logoutSoft: POST /api/auth/logout")
   state.log("i", "logout (soft) requested")
   if not persistentWV then
-    persistentWV = createPersistentWV()
-    if not persistentWV then
-      log.e("logoutSoft: webview creation failed, nothing to log out of")
-      if onDone then onDone() end
-      return
-    end
-  end
-  local function finish()
-    log.i("logoutSoft: tearing down webview")
-    M.destroyPersistent()  -- sets pageState = cold
+    -- No authed WV to log out of — just bounce the callback.
+    log.w("logoutSoft: no persistent WV; nothing to do")
     if onDone then onDone() end
-  end
-  -- Chain onto any pending nav so an in-flight fetch doesn't race us.
-  if pendingNav then
-    chainPendingNav(function()
-      pageState = "loading"
-      lastNavAt = hs.timer.secondsSinceEpoch()
-      pendingNav = { onFinish = function()
-        hs.timer.doAfter(0.3, finish)
-      end }
-      persistentWV:url("https://claude.ai/logout")
-    end)
     return
   end
-  pageState = "loading"
-  lastNavAt = hs.timer.secondsSinceEpoch()
-  pendingNav = { onFinish = function()
-    -- Any terminal nav is fine — /logout redirects to /login either way;
-    -- the one extra tick lets WebKit flush the Set-Cookie: sessionKey=;
-    -- Max-Age=0 response to the cookie jar before we tear the WV down.
-    hs.timer.doAfter(0.3, finish)
-  end }
-  persistentWV:url("https://claude.ai/logout")
+
+  local function destroy()
+    M.destroyPersistent()
+    if onDone then onDone() end
+  end
+
+  local function doLogout()
+    -- fetch must run same-origin on claude.ai so credentials:include sends
+    -- the session cookie + CSRF. persistentWV is already at
+    -- /settings/usage (TARGET_URL), so the origin is right.
+    local js = [[
+      (function(){
+        window.__cu_logout_result = 'pending';
+        fetch('/api/auth/logout', {
+          method: 'POST',
+          credentials: 'include',
+          headers: {'Content-Type': 'application/json'},
+          body: '{}'
+        })
+        .then(function(r){ window.__cu_logout_result = 'http:' + r.status; })
+        .catch(function(e){ window.__cu_logout_result = 'err:' + String(e); });
+      })()
+    ]]
+    persistentWV:evaluateJavaScript(js, function() end)
+    -- Give the fetch time to complete + Set-Cookie to land in the
+    -- WKWebsiteDataStore. 1.2 s is generous; the endpoint typically
+    -- responds in 100–300 ms.
+    hs.timer.doAfter(1.2, function()
+      persistentWV:evaluateJavaScript(
+        "String(window.__cu_logout_result || 'missing')",
+        function(status)
+          log.i("logoutSoft: " .. tostring(status))
+          state.log("i", "logout result: " .. tostring(status))
+          destroy()
+        end)
+    end)
+  end
+
+  -- If a fetch nav is in flight, wait for it to finish so the WV is in a
+  -- known state before we evaluate JS against it.
+  if pendingNav then
+    chainPendingNav(function() doLogout() end)
+  else
+    doLogout()
+  end
 end
 
 -- Hard logout: nuke the entire WebKit data store + killall Hammerspoon.
