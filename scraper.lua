@@ -343,22 +343,70 @@ function M.clearCookies()
   for _, p in ipairs(webkitPaths()) do rmSync(p) end
 end
 
--- Log out: destroy webview, wipe cookies, force-restart Hammerspoon.
+-- Soft logout: ask claude.ai to end the server-side session and let WebKit
+-- process the Set-Cookie response. That clears only claude.ai cookies —
+-- Google/Apple/GitHub identity cookies stay, so the next "Continue with
+-- Google" finishes in one click without a password prompt.
 --
--- os.exit(0) alone was unreliable here — when it didn't fully terminate the
--- process (observed after back-to-back logouts), `open -a Hammerspoon`
--- just re-focused the still-running app and WebKit served the in-memory
--- cookies as if nothing happened. Fix: spawn a detached shell script that
---   1) waits briefly for this function to return,
---   2) runs `killall Hammerspoon` from OUTSIDE the process (so it can't
---      be skipped by a timer going stale on reload),
---   3) wipes the cookie paths a SECOND time after the app is dead, so any
---      in-flight writes during shutdown can't re-materialise the session,
---   4) relaunches Hammerspoon.
--- The background script survives parent death (reparented to launchd).
-function M.logout()
-  log.i("logout: destroying webview + wiping cookies + force-relaunching")
-  state.log("i", "logout requested")
+-- No webview destroy-up-front: we need the persistent WV alive so it can
+-- load /logout and follow the redirect. After the nav completes (plus one
+-- extra tick to let Set-Cookie persist), we tear the WV down and reset
+-- pageState to "cold" so the next fetch restarts fresh and lands on
+-- /login → needs_login.
+function M.logoutSoft(onDone)
+  log.i("logoutSoft: navigating to claude.ai/logout")
+  state.log("i", "logout (soft) requested")
+  if not persistentWV then
+    persistentWV = createPersistentWV()
+    if not persistentWV then
+      log.e("logoutSoft: webview creation failed, nothing to log out of")
+      if onDone then onDone() end
+      return
+    end
+  end
+  local function finish()
+    log.i("logoutSoft: tearing down webview")
+    M.destroyPersistent()  -- sets pageState = cold
+    if onDone then onDone() end
+  end
+  -- Chain onto any pending nav so an in-flight fetch doesn't race us.
+  if pendingNav then
+    chainPendingNav(function()
+      pageState = "loading"
+      lastNavAt = hs.timer.secondsSinceEpoch()
+      pendingNav = { onFinish = function()
+        hs.timer.doAfter(0.3, finish)
+      end }
+      persistentWV:url("https://claude.ai/logout")
+    end)
+    return
+  end
+  pageState = "loading"
+  lastNavAt = hs.timer.secondsSinceEpoch()
+  pendingNav = { onFinish = function()
+    -- Any terminal nav is fine — /logout redirects to /login either way;
+    -- the one extra tick lets WebKit flush the Set-Cookie: sessionKey=;
+    -- Max-Age=0 response to the cookie jar before we tear the WV down.
+    hs.timer.doAfter(0.3, finish)
+  end }
+  persistentWV:url("https://claude.ai/logout")
+end
+
+-- Hard logout: nuke the entire WebKit data store + killall Hammerspoon.
+-- Loses Google/Apple/GitHub sessions too, so the next login re-prompts
+-- for every provider password. Reserved for the Debug menu when a user
+-- really wants all identity state wiped (shared machine, privacy reset,
+-- switching between unrelated Google accounts).
+--
+-- Implementation notes (from a prior debugging round):
+-- os.exit(0) alone was unreliable — when it no-oped, `open -a
+-- Hammerspoon` just re-focused the still-running app and WebKit served
+-- the in-memory cookies as if nothing happened. A detached shell script
+-- survives parent death (reparented to launchd) and kills Hammerspoon
+-- from outside, which can't be skipped by a timer going stale on reload.
+function M.logoutHard()
+  log.i("logoutHard: destroying webview + wiping cookies + force-relaunching")
+  state.log("i", "logout (hard) requested")
   M.destroyPersistent()
   for _, p in ipairs(webkitPaths()) do rmSync(p) end
 
@@ -373,10 +421,13 @@ function M.logout()
     table.concat(quotedRms, "; "),
     "/usr/bin/open -a Hammerspoon",
   }, "; ")
-  log.i("logout: scheduling " .. script)
+  log.i("logoutHard: scheduling " .. script)
   hs.execute("nohup /bin/bash -c " .. string.format("%q", script)
           .. " >/tmp/claude_usage_logout.log 2>&1 &")
-  hs.alert.show("Logging out — Hammerspoon will relaunch")
+  hs.alert.show("Hard logout — Hammerspoon will relaunch")
 end
+
+-- Backward-compat alias in case anything else in-tree calls M.logout.
+M.logout = M.logoutSoft
 
 return M

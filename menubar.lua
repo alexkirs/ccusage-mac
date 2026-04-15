@@ -534,7 +534,7 @@ local function buildFullMenu()
     table.insert(items, { title = "Open claude.ai/settings/usage", fn = function() openUrl(USAGE_URL) end })
     local logoutLabel = "Log out (" .. s.account.email
                      .. (s.account.orgName and (" · " .. s.account.orgName) or "") .. ")"
-    table.insert(items, { title = logoutLabel, fn = function() scraper.logout() end })
+    table.insert(items, { title = logoutLabel, fn = function() scraper.logoutSoft(refresh) end })
   else
     table.insert(items, {
       title = s.status == "needs_login" and "⚠  Log in to claude.ai…" or "Log in to claude.ai…",
@@ -664,6 +664,9 @@ local function buildFullMenu()
         openUrl("file://" .. os.getenv("HOME") .. "/.hammerspoon/claude_usage/debug")
       end },
     { title = "-" },
+    { title = "Hard logout (clear ALL sessions + relaunch)", fn = function()
+        scraper.logoutHard()
+      end },
     { title = "Clear cookies (relaunch Hammerspoon after)", fn = function()
         scraper.clearCookies()
         hs.alert.show("cookies wiped · relaunch Hammerspoon")
