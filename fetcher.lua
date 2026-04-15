@@ -137,7 +137,7 @@ local FETCH_JS_TEMPLATE = [[
   window.__cu.lastFetch = {stage:"starting", token: TOKEN};
 
   function isLoginUrl() {
-    return /\/(login|auth|sign-in|signin)/.test(location.href);
+    return /\/(login|logout|auth|sign-in|signin)(\?|$|\/)/.test(location.href);
   }
   if (isLoginUrl()) {
     window.__cu.lastFetch = {stage:"done", token: TOKEN, needsLogin: true};
@@ -290,7 +290,12 @@ local function runOnce(onDone)
   local lastUrl = nil
 
   local function isLoginUrl(u)
-    return type(u) == "string" and u:match("/(login|auth|sign%-in|signin)") ~= nil
+    if type(u) ~= "string" then return false end
+    -- Match path segments with trailing /, ? or end-of-string so /logout
+    -- hits but /login-style-tokens inside query strings (encoded or not)
+    -- are ignored.
+    return u:match("/(login|logout|auth|sign%-in|signin)[%?/]") ~= nil
+        or u:match("/(login|logout|auth|sign%-in|signin)$") ~= nil
   end
 
   pollTimer = hs.timer.doEvery(POLL_INTERVAL_S, function()
