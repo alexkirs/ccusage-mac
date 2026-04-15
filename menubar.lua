@@ -301,15 +301,18 @@ local function resetStr(win)
   return fmtRel(epoch) .. " (" .. fmtAbs(epoch) .. ")"
 end
 
+-- Every field that fetcher.fetch can populate. Wiped at refresh start so an
+-- earlier tick's value (e.g. a stale errorMsg from the React-mount race on
+-- cold load) never bleeds into a later successful tick's state.
+local FETCH_KEYS = {
+  "fiveHour", "weekly", "weeklySonnet", "weeklyOpus", "weeklyHaiku",
+  "spend", "account", "extraUsage", "warnings", "errorMsg",
+}
+
 local function refresh()
   log.d("refresh (fetcher path)")
   fetcher.fetch(function(parsed)
-    -- Clear per-fetch fields so stale values don't leak across refreshes.
-    state.data.warnings = nil
-    state.data.weeklySonnet = nil
-    state.data.weeklyOpus = nil
-    state.data.weeklyHaiku = nil
-    state.data.spend = nil
+    for _, k in ipairs(FETCH_KEYS) do state.data[k] = nil end
     for k, v in pairs(parsed) do state.data[k] = v end
     applyTitle()
   end)
@@ -340,6 +343,60 @@ local function fmtMoney(amount, currency)
   if not amount then return "—" end
   if currency == "USD" or not currency then return string.format("$%.2f", amount) end
   return string.format("%.2f %s", amount, currency)
+end
+
+-- Flip the Extra-usage switch via a DOM click in the persistent WV. Only
+-- safe for the ON → OFF direction; enabling triggers Anthropic's
+-- confirmation modal which can't be interacted with in our invisible view.
+-- After the click, refetch in 1 s and again in 2.5 s; if state didn't flip,
+-- surface a warning row so the user knows the DOM target moved.
+local DISABLE_EXTRA_JS = [[
+(function(){
+  try {
+    var sw = document.querySelector('input[role="switch"]');
+    if (!sw) return "no_switch";
+    // The extra-usage switch is the only role=switch on /settings/usage today,
+    // but guard anyway by checking the surrounding heading.
+    var node = sw, found = false;
+    for (var i = 0; i < 8 && node; i++) {
+      node = node.parentElement;
+      if (!node) break;
+      var h = node.querySelector("h1,h2,h3,h4");
+      if (h && /extra usage/i.test(h.textContent || "")) { found = true; break; }
+    }
+    if (!found) return "no_extra_usage_heading_near_switch";
+    sw.click();
+    return "clicked:" + (sw.checked === true ? "now_checked" : "now_unchecked");
+  } catch (e) { return "err: " + String(e); }
+})()
+]]
+
+local function toggleExtraUsageOff()
+  log.i("toggle extra usage: clicking switch")
+  scraper.runJS(DISABLE_EXTRA_JS, function(result, _)
+    log.i("toggle result: " .. tostring(result))
+    state.log("i", "extra_usage toggle click → " .. tostring(result))
+    if type(result) ~= "string" or not result:find("^clicked", 1) then
+      hs.alert.show("Extra usage toggle: " .. tostring(result))
+      return
+    end
+    -- Refetch to pick up the new state, then verify.
+    local expectedDisabled = state.data.extraUsage and state.data.extraUsage.isEnabled
+    refresh()
+    hs.timer.doAfter(2.5, function()
+      refresh()
+      hs.timer.doAfter(1, function()
+        local eu = state.data.extraUsage
+        if eu and eu.isEnabled == expectedDisabled then
+          -- Nothing changed: the click didn't take effect.
+          hs.alert.show("Extra usage didn't change — try claude.ai directly")
+          state.data.warnings = state.data.warnings or {}
+          table.insert(state.data.warnings, "Disable click didn't flip is_enabled — DOM target may have moved")
+          applyTitle()
+        end
+      end)
+    end)
+  end)
 end
 
 local function buildFullMenu()
@@ -386,18 +443,27 @@ local function buildFullMenu()
   if s.extraUsage then
     local eu = s.extraUsage
     table.insert(items, { title = "-" })
+    table.insert(items, { title = "Extra usage", disabled = true })
     if eu.isEnabled then
-      local summary = string.format("Extra usage: %s / %s",
-        fmtMoney(eu.usedCredits, eu.currency),
-        fmtMoney(eu.monthlyLimit, eu.currency))
-      if eu.utilization then summary = summary .. string.format(" (%d%%)", eu.utilization) end
-      table.insert(items, { title = summary, disabled = true })
       table.insert(items, {
-        title = "Open claude.ai/settings/usage",
-        fn = function() openUrl(USAGE_URL) end,
+        title = "    " .. fmtMoney(eu.usedCredits, eu.currency)
+                .. " / " .. fmtMoney(eu.monthlyLimit, eu.currency)
+                .. (eu.utilization and string.format(" (%d%%)", eu.utilization) or ""),
+        disabled = true,
       })
+      table.insert(items, { title = "    status: on", disabled = true })
+      -- Disable via DOM click on our persistent WV — safe direction (no modal).
+      table.insert(items, { title = "Disable extra usage", fn = toggleExtraUsageOff })
     else
-      table.insert(items, { title = "Extra usage: off", disabled = true })
+      table.insert(items, { title = "    status: off", disabled = true })
+      if eu.monthlyLimit then
+        table.insert(items, {
+          title = "    configured cap: " .. fmtMoney(eu.monthlyLimit, eu.currency),
+          disabled = true,
+        })
+      end
+      -- Enable requires confirming Anthropic's modal; our WV is invisible, so
+      -- we send the user to their default browser to handle that flow.
       table.insert(items, {
         title = "Enable in claude.ai…",
         fn = function() openUrl(USAGE_URL) end,
