@@ -308,7 +308,14 @@ function M.interactiveLogin(onClosed)
     )
     if not probeWV then probing = false; return end
     probeWV:windowStyle({ "borderless" })
-    pcall(function() probeWV:setCustomUserAgent(SAFARI_UA) end)
+    -- Try the same UA-setter chain interactiveLogin uses — some Hammerspoon
+    -- builds only expose one of these names.
+    pcall(function()
+      if probeWV.setCustomUserAgent then probeWV:setCustomUserAgent(SAFARI_UA)
+      elseif probeWV.customUserAgent then probeWV:customUserAgent(SAFARI_UA)
+      elseif probeWV.userAgent        then probeWV:userAgent(SAFARI_UA)
+      end
+    end)
     local teardown = function()
       if probeWV then pcall(function() probeWV:delete() end); probeWV = nil end
       probing = false
@@ -317,17 +324,26 @@ function M.interactiveLogin(onClosed)
       if done then teardown(); return end
       if action == "didFinishNavigation" then
         local purl = wv and wv:url() or ""
-        loginLog("probe nav finished url=%s", purl)
-        -- If the probe landed on /login, definitely unauthed.
-        if purl:match("/login") then teardown(); return end
+        -- /api/organizations responds:
+        --   authed   → HTTP 200, body starts with '[' (JSON array of orgs)
+        --   unauthed → HTTP 200, body '{"type":"error","error":{"error_code":
+        --              "account_session_invalid",…}}' (JSON object)
+        -- So "starts with '{'" is a FALSE positive. Match the array AND
+        -- explicitly exclude the session-invalid marker.
+        if purl:match("/login") then
+          loginLog("probe redirected to /login — unauthed")
+          teardown(); return
+        end
         wv:evaluateJavaScript(
-          "document.body && document.body.innerText ? document.body.innerText.slice(0,80) : ''",
+          "document.body && document.body.innerText ? document.body.innerText.slice(0,200) : ''",
           function(body)
             if done then teardown(); return end
-            local looksJson = type(body) == "string"
-                          and (body:sub(1,1) == "[" or body:sub(1,1) == "{")
-            loginLog("probe body[0..80]=%q json=%s", tostring(body or ""), tostring(looksJson))
-            if looksJson then
+            body = type(body) == "string" and body or ""
+            local authed = body:sub(1,1) == "["
+                       and not body:match("account_session_invalid")
+            loginLog("probe body[0..200]=%q authed=%s",
+              body:sub(1, 160), tostring(authed))
+            if authed then
               onLoginSuccess("probe authed via " .. purl)
               if urlTick then urlTick:stop(); urlTick = nil end
             end
@@ -335,6 +351,7 @@ function M.interactiveLogin(onClosed)
           end)
       elseif action == "didFailNavigation"
           or action == "didFailProvisionalNavigation" then
+        loginLog("probe nav failed action=%s url=%s", tostring(action), tostring(wv and wv:url()))
         teardown()
       end
     end)
