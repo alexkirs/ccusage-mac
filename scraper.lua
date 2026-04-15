@@ -196,8 +196,22 @@ function M.interactiveLogin(onClosed)
   loginWV:allowNewWindows(true)
 
   -- Force a normal window level so the window does NOT float above other apps.
-  -- Hammerspoon webviews default to a floating level in some builds.
-  pcall(function() loginWV:level(hs.drawing.windowLevels.normal) end)
+  -- Hammerspoon webviews default to a floating level in some builds. Try a
+  -- few known level constants and log which one took.
+  local function trySetLevel()
+    local tries = {
+      { name = "normal",  val = hs.drawing.windowLevels.normal },
+      { name = "desktopIcon", val = hs.drawing.windowLevels.desktopIcon },
+      { name = "0",       val = 0 },
+    }
+    for _, t in ipairs(tries) do
+      local ok, err = pcall(function() loginWV:level(t.val) end)
+      loginLog("level %s (val=%s) ok=%s err=%s",
+        t.name, tostring(t.val), tostring(ok), tostring(err))
+      if ok then return end
+    end
+  end
+  trySetLevel()
 
   -- Pose as Safari so Google's OAuth lets us through. Method name varies by
   -- Hammerspoon version; try both defensively.
@@ -232,18 +246,18 @@ function M.interactiveLogin(onClosed)
 
   -- policyCallback fires for every navigation + new-window request. Log every
   -- invocation so we can see what claude.ai/Google is actually asking for.
+  -- For newWindow we ALLOW the popup to be created — returning false and
+  -- redirecting same-window breaks Google Sign-In v3 because the consent
+  -- page expects window.opener.postMessage(token) via the storagerelay://
+  -- handshake. A real popup (with window.opener set) completes the flow;
+  -- a same-window redirect hangs forever on "One moment please…".
   loginWV:policyCallback(function(action, _, details, features)
     local reqURL = details and details.request and details.request.URL or "?"
     if action == "newWindow" then
-      loginLog("policy newWindow → %s (features=%s)", reqURL,
-        hs.inspect(features or {}):gsub("\n", " "))
-      if loginWV and reqURL ~= "?" then
-        loginWV:url(reqURL)
-      end
-      return false
+      loginLog("policy newWindow → %s ALLOW (features=%s)",
+        reqURL, hs.inspect(features or {}):gsub("\n", " "))
+      return true
     end
-    -- Also log decidePolicyForNavigationAction / Response so we can see
-    -- redirects claude.ai/Google drive internally.
     loginLog("policy %s url=%s", tostring(action), reqURL)
     return true
   end)
@@ -281,8 +295,17 @@ function M.interactiveLogin(onClosed)
 
   loginWV:url(TARGET_URL)
   loginWV:show()
-  loginWV:bringToFront()
+  -- Bring Hammerspoon's app forward (normal NSApp activation) instead of
+  -- elevating the window level. bringToFront() was escalating to a floating
+  -- level on this build; activating the app gives the new window focus
+  -- without making it sit above other apps' windows.
+  pcall(function() hs.application.launchOrFocus("Hammerspoon") end)
   loginLog("shown; initial url=%s", loginWV:url() or "?")
+
+  -- Friendly hint: Google's GSI uses popup + opener.postMessage. If hs.webview
+  -- refuses to actually create the popup, Google will hang on "One moment…".
+  -- In that case users should fall back to email login.
+  hs.alert.show("Tip: if Google sign-in hangs, use 'Continue with email' instead", 5)
 end
 
 local function rmTree(path)
