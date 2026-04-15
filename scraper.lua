@@ -166,76 +166,123 @@ local function isAuthedUrl(u)
   return u:match("claude%.ai/(settings|new|chat|recents|home)") ~= nil
 end
 
+-- Safari UA so Google's anti-automation checks don't treat the WKWebView as
+-- a bot. Without this, Sign-In-with-Google can stall on "One moment…" or
+-- throw unrelated errors (the "Bluetooth must be on" one the user hit).
+-- This is the UA string Safari 18 advertises.
+local SAFARI_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"
+
+local function loginLog(fmt, ...)
+  local line = "[loginWV] " .. string.format(fmt, ...)
+  log.i(line)
+  state.log("i", line)
+end
+
 function M.interactiveLogin(onClosed)
   if loginWV then
     loginWV:show():bringToFront()
     return
   end
-  log.i("interactive login opened")
+  loginLog("open")
   loginWV = hs.webview.new(
     { x = 160, y = 140, w = 820, h = 900 },
     { developerExtrasEnabled = true, javaScriptEnabled = true }
   )
-  if not loginWV then return end
-  loginWV:windowStyle({ "titled", "closable", "resizable" })
+  if not loginWV then loginLog("hs.webview.new returned nil"); return end
+
+  loginWV:windowStyle({ "titled", "closable", "resizable", "miniaturizable" })
   loginWV:allowTextEntry(true)
   loginWV:windowTitle("Log in to claude.ai")
   loginWV:allowNewWindows(true)
+
+  -- Force a normal window level so the window does NOT float above other apps.
+  -- Hammerspoon webviews default to a floating level in some builds.
+  pcall(function() loginWV:level(hs.drawing.windowLevels.normal) end)
+
+  -- Pose as Safari so Google's OAuth lets us through. Method name varies by
+  -- Hammerspoon version; try both defensively.
+  local uaOk, uaErr = pcall(function()
+    if loginWV.setCustomUserAgent then
+      loginWV:setCustomUserAgent(SAFARI_UA)
+    elseif loginWV.customUserAgent then
+      loginWV:customUserAgent(SAFARI_UA)
+    elseif loginWV.userAgent then
+      loginWV:userAgent(SAFARI_UA)
+    else
+      error("no UA method on hs.webview")
+    end
+  end)
+  loginLog("set user-agent ok=%s err=%s", tostring(uaOk), tostring(uaErr))
 
   local done = false
   local function onLoginSuccess(reason)
     if done then return end
     done = true
-    log.i("login success (" .. reason .. ")")
-    state.log("i", "login success (" .. reason .. ")")
-    -- Force the persistent WV to re-read the data store so fresh cookies land.
+    loginLog("success (%s)", reason)
     pageState = "cold"
     if loginWV then
       pcall(function() loginWV:delete() end)
       loginWV = nil
     end
-    -- Kick an immediate reload of the persistent WV so the menubar flips
-    -- from "⚠ login" to usage numbers within a second or two, rather than
-    -- waiting on the 60 s fetch timer.
     if persistentWV then
       pcall(function() M.reload(function(_, _) end) end)
     end
     if onClosed then onClosed() end
   end
 
-  -- OAuth popups: claude.ai's "Continue with Google/Apple/GitHub" buttons
-  -- trigger window.open(). WKWebView blocks those by default. Redirect the
-  -- requested URL into this same webview so the consent flow completes
-  -- instead of hanging forever on a blank "waiting…" popup.
-  loginWV:policyCallback(function(action, _, details)
+  -- policyCallback fires for every navigation + new-window request. Log every
+  -- invocation so we can see what claude.ai/Google is actually asking for.
+  loginWV:policyCallback(function(action, _, details, features)
+    local reqURL = details and details.request and details.request.URL or "?"
     if action == "newWindow" then
-      local url = details and details.request and details.request.URL
-      if url and loginWV then
-        log.i("oauth popup intercepted → " .. url)
-        loginWV:url(url)
+      loginLog("policy newWindow → %s (features=%s)", reqURL,
+        hs.inspect(features or {}):gsub("\n", " "))
+      if loginWV and reqURL ~= "?" then
+        loginWV:url(reqURL)
       end
       return false
     end
+    -- Also log decidePolicyForNavigationAction / Response so we can see
+    -- redirects claude.ai/Google drive internally.
+    loginLog("policy %s url=%s", tostring(action), reqURL)
     return true
   end)
 
-  -- URL-based success detection. Fires the moment a finished navigation
-  -- lands on an authed claude.ai page (e.g. /settings/usage, /new, /chat).
-  loginWV:navigationCallback(function(action, wv)
+  loginWV:navigationCallback(function(action, wv, navID, err)
+    local u = wv and wv:url() or "?"
+    loginLog("nav %s navID=%s url=%s err=%s",
+      tostring(action), tostring(navID), tostring(u), tostring(err))
     if action == "didFinishNavigation" then
-      local u = wv and wv:url() or ""
       if isAuthedUrl(u) then onLoginSuccess("authed url: " .. u) end
     end
   end)
 
-  -- Manual close OR window.close() from a provider page.
-  loginWV:windowCallback(function(action)
+  loginWV:windowCallback(function(action, _, frame)
+    loginLog("window %s frame=%s", tostring(action), hs.inspect(frame or {}):gsub("\n", " "))
     if action == "closing" then onLoginSuccess("window closed") end
+  end)
+
+  -- Periodic URL tick while the window is alive. Catches pushState/hash
+  -- changes that navigationCallback doesn't fire on, and tells us exactly
+  -- where a spinner is stuck.
+  local urlTick
+  local lastTickURL = nil
+  urlTick = hs.timer.doEvery(1, function()
+    if done or not loginWV then
+      if urlTick then urlTick:stop(); urlTick = nil end
+      return
+    end
+    local u = loginWV:url() or "?"
+    if u ~= lastTickURL then
+      loginLog("tick url=%s", u)
+      lastTickURL = u
+    end
   end)
 
   loginWV:url(TARGET_URL)
   loginWV:show()
   loginWV:bringToFront()
+  loginLog("shown; initial url=%s", loginWV:url() or "?")
 end
 
 local function rmTree(path)
