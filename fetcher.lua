@@ -1,11 +1,14 @@
--- React Query reader. Walks the SPA's React fiber tree to find the
--- QueryClient, calls refetchQueries to ask Anthropic's backend for fresh
--- usage numbers, then reads the structured JSON straight out of the cache.
+-- Data path: walks the SPA's React fiber tree once to find the TanStack
+-- QueryClient, then on every tick forces a fresh server round-trip for the
+-- three queries that drive the widget:
+--   unified_limits_utilization  → 5h / weekly / weekly-sonnet windows
+--   overage_spend_limit         → "Extra usage" balance + on/off
+--   current_account             → logged-in email + org (stable, not refetched)
 --
--- This is the only data-extraction path. The innerText scraper in
--- scraper.lua is now only used to drive WV navigation/login. If anything
--- in this path breaks, the widget surfaces a warning instead of falling
--- back to a worse path — the user can then debug or update the JS.
+-- No innerText parsing, no anchor table, no shape classifier. The SPA's own
+-- queryFn handles auth / CSRF / URL — we only read the decoded result.
+--
+-- Failure mode: surface a specific warning; no fallback.
 
 local state = require("claude_usage.state")
 local scraper = require("claude_usage.scraper")
@@ -13,30 +16,42 @@ local log = hs.logger.new("cu.fetcher", hs.settings.get("claude_usage.log_level"
 
 local M = {}
 
-local FETCH_TIMEOUT_S = 15
+local FETCH_TIMEOUT_S = 20  -- generous so the JS-side 6 s mount-wait never races this
 local POLL_INTERVAL_S = 0.1
+local SAFETY_RELOAD_INTERVAL_S = 3 * 3600   -- reload the WV every 3h for hygiene
+local DEBUG_DIR = os.getenv("HOME") .. "/.hammerspoon/claude_usage/debug"
 
 ---------------------------------------------------------------------
--- ISO timestamp → epoch
+-- Helpers
 ---------------------------------------------------------------------
 
--- Compute local time's offset from UTC in seconds (positive if ahead).
 local function utcOffset()
   local now = os.time()
   return os.difftime(now, os.time(os.date("!*t", now)))
 end
 
--- "2026-04-15T14:00:00.590910+00:00" → epoch (assumes UTC source).
+-- "2026-04-15T14:00:00.590910+00:00" → epoch (source always UTC in practice).
 local function isoToEpoch(iso)
   if not iso or type(iso) ~= "string" then return nil end
   local y, mo, d, h, mi, s = iso:match("(%d+)-(%d+)-(%d+)T(%d+):(%d+):(%d+)")
   if not y then return nil end
-  -- os.time interprets the components table as LOCAL time. Add the local
-  -- UTC offset to convert to the true UTC epoch.
   return os.time({
     year = tonumber(y), month = tonumber(mo), day = tonumber(d),
     hour = tonumber(h), min = tonumber(mi), sec = tonumber(s),
   }) + utcOffset()
+end
+
+local function writeFile(path, contents)
+  hs.fs.mkdir(DEBUG_DIR)
+  local f = io.open(path, "w")
+  if not f then return end
+  f:write(contents or "")
+  f:close()
+end
+
+local function dumpArtifact(info)
+  if not hs.settings.get("claude_usage.dump_fetcher") then return end
+  writeFile(DEBUG_DIR .. "/last-fetcher.json", hs.json.encode(info, true))
 end
 
 ---------------------------------------------------------------------
@@ -48,47 +63,59 @@ local function makeWindow(d)
   return {
     percentUsed = d.utilization,
     percentLeft = math.max(0, 100 - d.utilization),
-    resetsAt = isoToEpoch(d.resets_at),
+    resetsAt    = isoToEpoch(d.resets_at),
     resetsHuman = nil,
   }
 end
 
-local function mapResponse(data)
-  if type(data) ~= "table" then
-    return { status = "error", errorMsg = "fetcher: response not a table" }
-  end
-  local five = makeWindow(data.five_hour)
-  local weekly = makeWindow(data.seven_day)
-  if not five or not weekly then
+local function mapOverage(raw)
+  if type(raw) ~= "table" then return nil end
+  local cents = tonumber(raw.monthly_credit_limit)
+  local used  = tonumber(raw.used_credits)
+  return {
+    isEnabled     = raw.is_enabled == true,
+    monthlyLimit  = cents and (cents / 100) or nil,
+    usedCredits   = used and (used / 100) or nil,
+    utilization   = (cents and cents > 0 and used) and math.floor(used / cents * 100 + 0.5) or nil,
+    currency      = raw.currency or "USD",
+  }
+end
+
+local function mapResponse(info)
+  local usage = info.usage
+  if type(usage) ~= "table" then
     return {
       status = "error",
-      errorMsg = "fetcher: missing five_hour/seven_day in response",
+      errorMsg = "fetcher: unified_limits_utilization missing or not a table",
       warnings = {
-        "API response shape changed — expected fields five_hour and seven_day with .utilization and .resets_at",
-        "Open Debug → Copy state JSON and inspect the raw response in last-fetcher.json",
+        "Response shape changed — unified_limits_utilization.data was not an object",
+        "Inspect Debug → Dump fetcher response; check debug/last-fetcher.json",
       },
     }
   end
-  local spend = {}
-  if data.extra_usage and data.extra_usage.is_enabled
-      and type(data.extra_usage.utilization) == "number" then
-    table.insert(spend, {
-      percentUsed = data.extra_usage.utilization,
-      percentLeft = math.max(0, 100 - data.extra_usage.utilization),
-      resetsAt = nil,  -- API doesn't expose a reset for spend
-      resetsHuman = nil,
-      heading = "Extra usage",
-    })
+  local five   = makeWindow(usage.five_hour)
+  local weekly = makeWindow(usage.seven_day)
+  if not five or not weekly then
+    return {
+      status = "error",
+      errorMsg = "fetcher: missing five_hour/seven_day fields",
+      warnings = {
+        "API response shape changed — expected five_hour.utilization and seven_day.utilization",
+        "Enable Debug → Dump fetcher response to see the raw shape",
+      },
+    }
   end
   return {
-    status = "ok",
-    fiveHour = five,
-    weekly = weekly,
-    weeklySonnet = makeWindow(data.seven_day_sonnet),
-    weeklyOpus = makeWindow(data.seven_day_opus),
-    weeklyHaiku = makeWindow(data.seven_day_haiku),
-    spend = spend,
-    warnings = {},
+    status       = "ok",
+    fiveHour     = five,
+    weekly       = weekly,
+    weeklySonnet = makeWindow(usage.seven_day_sonnet),
+    weeklyOpus   = makeWindow(usage.seven_day_opus),
+    weeklyHaiku  = makeWindow(usage.seven_day_haiku),
+    account      = info.account,
+    extraUsage   = mapOverage(info.overage),
+    spend        = {},
+    warnings     = {},
   }
 end
 
@@ -96,9 +123,13 @@ end
 -- JS payload
 ---------------------------------------------------------------------
 
--- Walks the React fiber tree to find the TanStack QueryClient, calls
--- refetchQueries to force a fresh server fetch, then stashes the resolved
--- query state on window.__cu.lastFetch with the supplied token.
+-- Walks the React fiber tree to find the QueryClient (cached on window.__cu),
+-- refetches the two live queries in parallel, then reads the three queries we
+-- care about and stashes the combined payload on window.__cu.lastFetch with
+-- the supplied token (for read-poll ordering).
+--
+-- React hydration is async after didFinishNavigation, so the fiber walk is
+-- wrapped in an internal setTimeout retry loop with a 6 s deadline.
 local FETCH_JS_TEMPLATE = [[
 (function(){
   var TOKEN = "%s";
@@ -110,24 +141,17 @@ local FETCH_JS_TEMPLATE = [[
     return;
   }
 
-  // Cache the queryClient on window so we don't re-walk the fiber every tick.
-  if (!window.__cu.qc || !window.__cu.qc.getQueryCache) {
+  var deadline = Date.now() + 6000;
+
+  function tryFindQc() {
     try {
+      if (window.__cu.qc && window.__cu.qc.getQueryCache) return null; // already have it
       var root = document.getElementById("root");
-      if (!root) {
-        window.__cu.lastFetch = {stage:"done", token: TOKEN, err: "no #root element"};
-        return;
-      }
-      var key = Object.keys(root).find(function(k){ return k.indexOf("__reactContainer") === 0; });
-      if (!key) {
-        window.__cu.lastFetch = {stage:"done", token: TOKEN, err: "no __reactContainer key on #root"};
-        return;
-      }
-      var fiber = root[key].stateNode && root[key].stateNode.current;
-      if (!fiber) {
-        window.__cu.lastFetch = {stage:"done", token: TOKEN, err: "no fiber on react container"};
-        return;
-      }
+      if (!root) return "no #root";
+      var rkey = Object.keys(root).find(function(k){ return k.indexOf("__reactContainer") === 0; });
+      if (!rkey) return "no __reactContainer";
+      var fiber = root[rkey].stateNode && root[rkey].stateNode.current;
+      if (!fiber) return "no fiber";
       var queue = [fiber], found = null, visited = 0;
       while (queue.length && !found && visited++ < 5000) {
         var n = queue.shift(); if (!n) continue;
@@ -136,56 +160,89 @@ local FETCH_JS_TEMPLATE = [[
         if (n.child) queue.push(n.child);
         if (n.sibling) queue.push(n.sibling);
       }
-      if (!found) {
-        window.__cu.lastFetch = {stage:"done", token: TOKEN, err: "no QueryClient (visited " + visited + " fibers)"};
-        return;
-      }
+      if (!found) return "no QueryClient (visited " + visited + ")";
       window.__cu.qc = found;
+      return null;
     } catch (e) {
-      window.__cu.lastFetch = {stage:"done", token: TOKEN, err: "fiber walk: " + String(e)};
-      return;
+      return "fiber walk: " + String(e);
     }
   }
 
-  try {
-    window.__cu.qc.refetchQueries({queryKey: ["unified_limits_utilization"]})
-      .then(function(){
+  function readQuery(name) {
+    var all = window.__cu.qc.getQueryCache().getAll();
+    return all.find(function(q){
+      return q.queryKey && q.queryKey[0] === name && q.queryKey.length === 2;
+    });
+  }
+
+  function doRefetch() {
+    var qc = window.__cu.qc;
+    try {
+      Promise.all([
+        qc.refetchQueries({queryKey: ["unified_limits_utilization"]}),
+        qc.refetchQueries({queryKey: ["overage_spend_limit"]}),
+      ]).then(function(){
         try {
-          var all = window.__cu.qc.getQueryCache().getAll();
-          var q = all.find(function(q){
-            return q.queryKey && q.queryKey[0] === "unified_limits_utilization";
-          });
-          if (!q) {
-            window.__cu.lastFetch = {stage:"done", token: TOKEN, err: "unified_limits_utilization query not in cache after refetch"};
+          var u = readQuery("unified_limits_utilization");
+          var o = readQuery("overage_spend_limit");
+          var a = readQuery("current_account");
+          if (!u) {
+            // The usage query is bound to the settings/usage page; it may
+            // not appear until the user-facing component mounts. Retry.
+            if (Date.now() < deadline) { setTimeout(doRefetch, 200); return; }
+            window.__cu.lastFetch = {stage:"done", token: TOKEN, err: "unified_limits_utilization not in cache after 6s"};
             return;
           }
-          if (q.state.status === "error") {
-            window.__cu.lastFetch = {stage:"done", token: TOKEN, err: "query state=error: " + String(q.state.error)};
+          if (u.state.status === "error") {
+            window.__cu.lastFetch = {stage:"done", token: TOKEN, err: "unified_limits_utilization state=error: " + String(u.state.error)};
             return;
+          }
+          var acct = null;
+          if (a && a.state && a.state.data && a.state.data.account) {
+            var d = a.state.data;
+            var mem = (d.account.memberships || [])[0];
+            acct = {
+              email: d.account.email_address || null,
+              fullName: d.account.full_name || null,
+              orgUuid: mem && mem.organization && mem.organization.uuid || null,
+              orgName: mem && mem.organization && mem.organization.name || null,
+            };
           }
           window.__cu.lastFetch = {
             stage: "done", token: TOKEN,
-            queryStatus: q.state.status,
-            updatedAt: q.state.dataUpdatedAt,
-            data: q.state.data,
+            usage: u.state.data,
+            overage: o && o.state && o.state.data || null,
+            account: acct,
           };
         } catch (e) {
           window.__cu.lastFetch = {stage:"done", token: TOKEN, err: "extract: " + String(e)};
         }
-      })
-      .catch(function(e){
+      }).catch(function(e){
         window.__cu.lastFetch = {stage:"done", token: TOKEN, err: "refetch reject: " + String(e)};
       });
-  } catch (e) {
-    window.__cu.lastFetch = {stage:"done", token: TOKEN, err: "refetch throw: " + String(e)};
+    } catch (e) {
+      window.__cu.lastFetch = {stage:"done", token: TOKEN, err: "refetch throw: " + String(e)};
+    }
   }
+
+  function waitAndStart() {
+    var err = tryFindQc();
+    if (!window.__cu.qc) {
+      if (Date.now() < deadline) { setTimeout(waitAndStart, 200); return; }
+      window.__cu.lastFetch = {stage:"done", token: TOKEN, err: "SPA never mounted in 6s: " + (err || "unknown")};
+      return;
+    }
+    doRefetch();
+  }
+
+  waitAndStart();
 })()
 ]]
 
 local READ_JS = "JSON.stringify(window.__cu && window.__cu.lastFetch || {stage:'none'})"
 
 ---------------------------------------------------------------------
--- Fetch path
+-- Fetch orchestration
 ---------------------------------------------------------------------
 
 local function runOnce(onDone)
@@ -218,10 +275,9 @@ local function runOnce(onDone)
       if pollTimer then pollTimer:stop(); pollTimer = nil end
       if timeoutTimer then timeoutTimer:stop(); timeoutTimer = nil end
 
-      if info.needsLogin then
-        finish({ status = "needs_login" })
-        return
-      end
+      dumpArtifact(info)
+
+      if info.needsLogin then finish({ status = "needs_login" }); return end
       if info.err then
         log.e("fetcher: " .. info.err)
         finish({
@@ -229,13 +285,13 @@ local function runOnce(onDone)
           errorMsg = "fetcher: " .. info.err,
           warnings = {
             "Fetcher path broken: " .. info.err,
-            "Likely cause: SPA changed React internals, or the unified_limits_utilization query key was renamed",
+            "Likely cause: SPA changed React internals, or a query key was renamed",
             "Debug: open Hammerspoon console; Debug → Copy state JSON",
           },
         })
         return
       end
-      finish(mapResponse(info.data))
+      finish(mapResponse(info))
     end)
   end)
 
@@ -255,6 +311,18 @@ local function runOnce(onDone)
   end)
 end
 
+local function maybeSafetyReload(onContinue)
+  local lastNav = scraper.lastNavAt()
+  if lastNav <= 0 then return onContinue() end
+  local now = hs.timer.secondsSinceEpoch()
+  if now - lastNav < SAFETY_RELOAD_INTERVAL_S then return onContinue() end
+  log.i(string.format("fetcher: %.0fs since last nav; running hygiene reload", now - lastNav))
+  scraper.reload(function(ok, err)
+    if not ok then log.w("safety reload failed: " .. tostring(err)) end
+    onContinue()
+  end)
+end
+
 function M.fetch(onDone)
   scraper.ensureLoaded(function(ok, err)
     if not ok then
@@ -269,11 +337,7 @@ function M.fetch(onDone)
       })
       return
     end
-    if err == "needs_login" then
-      onDone({ status = "needs_login", lastFetch = os.time() })
-      return
-    end
-    runOnce(onDone)
+    maybeSafetyReload(function() runOnce(onDone) end)
   end)
 end
 

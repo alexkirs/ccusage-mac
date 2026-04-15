@@ -75,31 +75,56 @@ Built in from day one so iteration is cheap after launch:
 ~/.hammerspoon/claude_usage/     (symlink → this repo)
   init.lua     entry: requires + starts menubar module
   state.lua    in-memory snapshot, log ring, fetch-timing average
-  scraper.lua  hs.webview fetch, replay-file loading, login flow, cookie wipe, artifact capture
-  parser.lua   pure-Lua classifier: innerText → usage windows (session / weekly / spend / unknown)
+  scraper.lua  hs.webview lifecycle: navigation, reload, login, cookie wipe
+  fetcher.lua  React Query reader: walks fiber, calls refetchQueries, reads JSON
   menubar.lua  hs.menubar wiring, title formatter, full + minimal menus, Debug submenu, timers
 ```
 
+### Data path
+
+The widget reads the SPA's in-memory **TanStack QueryClient** via React fiber
+traversal. On every tick:
+
+1. `fetcher.fetch` → `scraper.ensureLoaded` guarantees the persistent WV is
+   at `/settings/usage`.
+2. A JS snippet walks the fiber tree to find the QueryClient (cached on
+   `window.__cu.qc` after the first walk), then calls
+   `refetchQueries({queryKey:["unified_limits_utilization"]})` and
+   `refetchQueries({queryKey:["overage_spend_limit"]})` in parallel.
+3. Once the promises resolve, the snippet reads three queries out of the
+   cache: `unified_limits_utilization`, `overage_spend_limit`, and
+   `current_account`.
+4. Lua decodes the JSON, maps ISO timestamps to epochs, and updates state.
+
+Anthropic's actual API URL / auth / CSRF are all handled by the SPA's own
+`queryFn` — the widget never has to replicate any of that.
+
+**No fallback**: if the fiber walk breaks, the widget surfaces a specific
+actionable warning (e.g. "SPA changed React internals, or a query key was
+renamed") in the menu rather than quietly failing over to a worse path.
+
+Enable `Debug → Dump fetcher response` to write the decoded JSON to
+`~/.hammerspoon/claude_usage/debug/last-fetcher.json` for forensics.
+
 ### Fetch flow
 
-One persistent `hs.webview` is created on first fetch and kept alive. Three paths:
+One persistent `hs.webview` is created on first tick and kept alive. It's
+shown borderless at `(−9000, −9000)` 900×900 — WKWebView pauses JS on views
+that were never `:show()`n, so we have to render off-screen-but-visible.
 
 | Path | When | Cost |
 |---|---|---|
-| **Cold** | First fetch (no WV yet) | Create WV, `show()` at `(−9000, −9000)` borderless (WKWebView pauses JS on truly off-screen views, so it must be shown), navigate, content-poll (300 ms × 20 max ≈ 6 s cap), extract. ~1.5 s |
-| **Warm** | `pageState == "ready"` and last hard reload < 15 min ago | `evaluateJavaScript(EXTRACT_JS)` on the already-loaded page. No navigation, no network, just one IPC. **~10 ms** |
-| **Stale** | 15 min safety timer elapsed, user forced reload, or warm extract returned empty / `needs_login` | `wv:reload()` on the existing WV (keeps WebContent process + HTTP cache + cookies hot), content-poll, extract. ~1.5 s |
+| **Cold** | First fetch (no WV yet) | Create WV, navigate to `/settings/usage`, wait for `didFinishNavigation`, fetcher JS waits for React mount (up to 6 s), then one refetch round-trip. ~1–2 s total. |
+| **Warm** | Every tick thereafter | Fetcher JS re-enters — `window.__cu.qc` is cached, so no fiber walk. `Promise.all([refetchQueries, refetchQueries])` + read three queries. **~400 ms**, matches the SPA's own cadence. |
+| **Safety reload** | `now − scraper.lastNavAt() > 3 h` | `wv:reload()` before the next warm tick, to keep the long-lived WV + React heap fresh. |
 
-At 60 s cadence that's ~96 hard reloads/day instead of ~1440, and the other ~1344 ticks do a single IPC call each. Roughly **180× less CPU and 96× fewer network requests per day** vs. a naive create-and-destroy-per-fetch design.
+A single `navigationCallback` is attached to the persistent WV once;
+per-navigation routing uses a `pendingNav` handler that fires then clears
+itself, so back-to-back reloads never cross-talk.
 
-Extract details:
-
-- `READY_JS` polls `innerText.length > 400 && /\d+%/.test(innerText)` until the SPA has rendered.
-- `EXTRACT_JS` returns `{innerText, title, href}` on the normal path. Adds the full `html` blob only when **Debug → Save artifacts** is on (saves ~200 KB per IPC roundtrip on the default path).
-- `parser.parse(innerText)` in Lua does all classification. The same function runs against replay files.
-- Overall 30 s timeout. On failure, last known values stay shown and the title glyph flips to `⚠`.
-
-A single `navigationCallback` is attached to the persistent WV once; per-navigation routing uses a `pendingNav` handler that fires then clears itself, so back-to-back reloads never cross-talk.
+`fetcher.fetch`'s 20 s timeout is a safety net — if the JS-side poll loop
+waits 6 s for React mount and the subsequent refetch takes another few
+seconds, we still finish well inside the budget.
 
 ### Parser (bulletproof-ish)
 

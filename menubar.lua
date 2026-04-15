@@ -241,6 +241,7 @@ end
 -- Cached by (worstPct, hex) so we don't redraw an identical icon every tick.
 local ICON_W, ICON_H = 5, 16
 local _iconCache = {}
+local _iconCacheSize = 0
 local function progressBarIcon(pctUsed, hex)
   if type(pctUsed) ~= "number" then return nil end
   local pct = math.max(0, math.min(100, pctUsed))
@@ -266,8 +267,12 @@ local function progressBarIcon(pctUsed, hex)
   local img = canvas:imageFromCanvas()
   canvas:delete()
   _iconCache[cacheKey] = img
-  -- Bound the cache; one entry per (fillH × bucket) is at most ~64.
-  if next(_iconCache) and #_iconCache > 256 then _iconCache = {} end
+  _iconCacheSize = _iconCacheSize + 1
+  -- Possible keys: (fillH 0..16) × 4 bucket colors = 68. Wipe well above that
+  -- to catch any color drift, but still bounded.
+  if _iconCacheSize > 64 then
+    _iconCache = {}; _iconCacheSize = 0
+  end
   return img
 end
 
@@ -329,10 +334,34 @@ local function buildMinimalMenu()
   }
 end
 
+local USAGE_URL = "https://claude.ai/settings/usage"
+
+local function fmtMoney(amount, currency)
+  if not amount then return "—" end
+  if currency == "USD" or not currency then return string.format("$%.2f", amount) end
+  return string.format("%.2f %s", amount, currency)
+end
+
 local function buildFullMenu()
   local items = {}
   local s = state.data
 
+  -- Top row: login / account status.
+  if s.status == "needs_login" then
+    table.insert(items, {
+      title = "⚠  Log in to claude.ai…",
+      fn = function() scraper.interactiveLogin(function() refresh() end) end,
+    })
+    table.insert(items, { title = "-" })
+  elseif s.status == "ok" and s.account and s.account.email then
+    table.insert(items, { title = "Logged in as " .. s.account.email, disabled = true })
+    if s.account.orgName then
+      table.insert(items, { title = "    " .. s.account.orgName, disabled = true })
+    end
+    table.insert(items, { title = "-" })
+  end
+
+  -- Per-window usage.
   if s.fiveHour then
     table.insert(items, { title = "5h window", disabled = true })
     table.insert(items, { title = "    " .. s.fiveHour.percentUsed .. "% used", disabled = true })
@@ -353,9 +382,33 @@ local function buildFullMenu()
     table.insert(items, { title = "    resets in " .. resetStr(s.weeklySonnet), disabled = true })
   end
 
+  -- Extra usage (overage) block.
+  if s.extraUsage then
+    local eu = s.extraUsage
+    table.insert(items, { title = "-" })
+    if eu.isEnabled then
+      local summary = string.format("Extra usage: %s / %s",
+        fmtMoney(eu.usedCredits, eu.currency),
+        fmtMoney(eu.monthlyLimit, eu.currency))
+      if eu.utilization then summary = summary .. string.format(" (%d%%)", eu.utilization) end
+      table.insert(items, { title = summary, disabled = true })
+      table.insert(items, {
+        title = "Open claude.ai/settings/usage",
+        fn = function() openUrl(USAGE_URL) end,
+      })
+    else
+      table.insert(items, { title = "Extra usage: off", disabled = true })
+      table.insert(items, {
+        title = "Enable in claude.ai…",
+        fn = function() openUrl(USAGE_URL) end,
+      })
+    end
+  end
+
+  -- Warnings (fetcher surfaces actionable strings here).
   if s.warnings and #s.warnings > 0 then
     table.insert(items, { title = "-" })
-    table.insert(items, { title = "⚠  Parser drift detected — widget may need code update", disabled = true })
+    table.insert(items, { title = "⚠  Widget needs attention", disabled = true })
     for _, w in ipairs(s.warnings) do
       table.insert(items, { title = "      • " .. tostring(w), disabled = true })
     end
@@ -369,22 +422,11 @@ local function buildFullMenu()
     table.insert(items, { title = "  " .. tostring(s.errorMsg):sub(1, 120), disabled = true })
   end
 
-  if s.status == "needs_login" then
-    table.insert(items, { title = "-" })
-    table.insert(items, { title = "⚠  Log in to claude.ai", fn = function()
-      scraper.interactiveLogin(function() refresh() end)
-    end })
-  end
-
   table.insert(items, { title = "-" })
   table.insert(items, { title = "Refresh now", fn = refresh })
-  table.insert(items, { title = "Open claude.ai/settings/usage", fn = function()
-    openUrl("https://claude.ai/settings/usage")
-  end })
-  table.insert(items, { title = "Log in…", fn = function()
-    scraper.interactiveLogin(function() refresh() end)
-  end })
+  table.insert(items, { title = "Open claude.ai/settings/usage", fn = function() openUrl(USAGE_URL) end })
 
+  -- Display format submenu.
   local fmtItems = {}
   for _, f in ipairs(FORMATS) do
     table.insert(fmtItems, {
@@ -398,35 +440,29 @@ local function buildFullMenu()
   end
   table.insert(items, { title = "Display format", menu = fmtItems })
 
-  local replayPath = get("replay_path")
+  -- Debug submenu — slim now that the innerText path is gone.
   local debugItems = {
     { title = "Open Hammerspoon console", fn = function() hs.openConsole() end },
-    { title = "Save artifacts (html/txt/json)",
-      checked = get("save_artifacts", false) == true,
-      fn = function() set("save_artifacts", not (get("save_artifacts", false) == true)) end },
-    { title = "Show fetch webview",
-      checked = get("debug_visible", false) == true,
-      fn = function() set("debug_visible", not (get("debug_visible", false) == true)) end },
-    { title = "Keep fetch webview open after extract",
-      checked = get("keep_webview", false) == true,
-      fn = function() set("keep_webview", not (get("keep_webview", false) == true)) end },
+    { title = "Dump fetcher response to debug/last-fetcher.json",
+      checked = get("dump_fetcher", false) == true,
+      fn = function() set("dump_fetcher", not (get("dump_fetcher", false) == true)) end },
     { title = "-" },
-    { title = "Force re-fetch now (warm)", fn = refresh },
-    { title = "Reload page now (hard)", fn = function() scraper.forceReload(function(p)
-        for k, v in pairs(p) do state.data[k] = v end
-        applyTitle()
-      end) end },
+    { title = "Force re-fetch now", fn = refresh },
+    { title = "Reload page now (hard)", fn = function()
+        scraper.reload(function(_, _) refresh() end)
+      end },
     { title = "Destroy persistent webview", fn = function()
         scraper.destroyPersistent()
         hs.alert.show("persistent webview destroyed")
       end },
-    { title = "Copy fetch debug state", fn = function()
-        hs.pasteboard.setContents(hs.json.encode(scraper.debugState(), true))
-        hs.alert.show("fetch debug state copied")
-      end },
+    { title = "-" },
     { title = "Copy state JSON", fn = function()
         hs.pasteboard.setContents(hs.json.encode(state.data, true))
         hs.alert.show("state JSON copied")
+      end },
+    { title = "Copy scraper debug state", fn = function()
+        hs.pasteboard.setContents(hs.json.encode(scraper.debugState(), true))
+        hs.alert.show("scraper debug state copied")
       end },
     { title = "Copy fetch log (in-memory)", fn = function()
         hs.pasteboard.setContents(table.concat(state.logRing, "\n"))
@@ -436,21 +472,6 @@ local function buildFullMenu()
         openUrl("file://" .. os.getenv("HOME") .. "/.hammerspoon/claude_usage/debug")
       end },
     { title = "-" },
-    { title = replayPath and ("Replay: " .. replayPath:match("([^/]+)$")) or "Set replay HTML…",
-      fn = function()
-        local pick = hs.dialog.chooseFileOrFolder(
-          "Pick a saved HTML snapshot",
-          os.getenv("HOME") .. "/.hammerspoon/claude_usage/debug",
-          true, false, false, { "html", "htm", "txt", "json" })
-        if pick and pick["1"] then
-          set("replay_path", pick["1"])
-          refresh()
-        end
-      end },
-    { title = "Clear replay mode",
-      disabled = not replayPath,
-      fn = function() set("replay_path", nil); refresh() end },
-    { title = "-" },
     { title = "Clear cookies (relaunch Hammerspoon after)", fn = function()
         scraper.clearCookies()
         hs.alert.show("cookies wiped · relaunch Hammerspoon")
@@ -459,7 +480,7 @@ local function buildFullMenu()
         M.stop()
         for _, mod in ipairs({ "claude_usage", "claude_usage.menubar",
                                "claude_usage.fetcher", "claude_usage.scraper",
-                               "claude_usage.parser", "claude_usage.state" }) do
+                               "claude_usage.state" }) do
           package.loaded[mod] = nil
         end
         require("claude_usage")
@@ -505,7 +526,9 @@ function M.start()
   refresh()
   M.fetchTimer = hs.timer.doEvery(60, function() refresh() end)
   -- Cheap tick so "last fetch Xs ago" and glyph stay current without a fetch.
-  M.titleTimer = hs.timer.doEvery(15, function()
+  -- Countdown only updates minute-by-minute, so 60 s is enough to keep it
+  -- alive between fetches (fetchTimer fires every 60 s anyway).
+  M.titleTimer = hs.timer.doEvery(60, function()
     applyTitle()
   end)
   log.i("started v" .. M.VERSION)
