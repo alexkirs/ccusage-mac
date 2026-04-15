@@ -158,9 +158,17 @@ end
 -- Login + cookies
 ---------------------------------------------------------------------
 
+-- Match the post-login landing pages claude.ai sends authenticated users to.
+-- /login|/auth|/sign-in means the flow is still mid-stream.
+local function isAuthedUrl(u)
+  if type(u) ~= "string" then return false end
+  if u:match("/(login|auth|sign%-in|signin)") then return false end
+  return u:match("claude%.ai/(settings|new|chat|recents|home)") ~= nil
+end
+
 function M.interactiveLogin(onClosed)
   if loginWV then
-    loginWV:show():bringToFront(true)
+    loginWV:show():bringToFront()
     return
   end
   log.i("interactive login opened")
@@ -172,23 +180,62 @@ function M.interactiveLogin(onClosed)
   loginWV:windowStyle({ "titled", "closable", "resizable" })
   loginWV:allowTextEntry(true)
   loginWV:windowTitle("Log in to claude.ai")
-  loginWV:url(TARGET_URL)
-  loginWV:show()
-  loginWV:bringToFront(true)
+  loginWV:allowNewWindows(true)
 
-  local poll
-  poll = hs.timer.doEvery(1, function()
-    if not loginWV then poll:stop(); return end
-    local hswin = loginWV:hswindow()
-    if not hswin then
-      log.i("login window closed")
+  local done = false
+  local function onLoginSuccess(reason)
+    if done then return end
+    done = true
+    log.i("login success (" .. reason .. ")")
+    state.log("i", "login success (" .. reason .. ")")
+    -- Force the persistent WV to re-read the data store so fresh cookies land.
+    pageState = "cold"
+    if loginWV then
+      pcall(function() loginWV:delete() end)
       loginWV = nil
-      poll:stop()
-      -- Force the persistent WV to pick up new cookies on its next tick.
-      pageState = "cold"
-      if onClosed then onClosed() end
+    end
+    -- Kick an immediate reload of the persistent WV so the menubar flips
+    -- from "⚠ login" to usage numbers within a second or two, rather than
+    -- waiting on the 60 s fetch timer.
+    if persistentWV then
+      pcall(function() M.reload(function(_, _) end) end)
+    end
+    if onClosed then onClosed() end
+  end
+
+  -- OAuth popups: claude.ai's "Continue with Google/Apple/GitHub" buttons
+  -- trigger window.open(). WKWebView blocks those by default. Redirect the
+  -- requested URL into this same webview so the consent flow completes
+  -- instead of hanging forever on a blank "waiting…" popup.
+  loginWV:policyCallback(function(action, _, details)
+    if action == "newWindow" then
+      local url = details and details.request and details.request.URL
+      if url and loginWV then
+        log.i("oauth popup intercepted → " .. url)
+        loginWV:url(url)
+      end
+      return false
+    end
+    return true
+  end)
+
+  -- URL-based success detection. Fires the moment a finished navigation
+  -- lands on an authed claude.ai page (e.g. /settings/usage, /new, /chat).
+  loginWV:navigationCallback(function(action, wv)
+    if action == "didFinishNavigation" then
+      local u = wv and wv:url() or ""
+      if isAuthedUrl(u) then onLoginSuccess("authed url: " .. u) end
     end
   end)
+
+  -- Manual close OR window.close() from a provider page.
+  loginWV:windowCallback(function(action)
+    if action == "closing" then onLoginSuccess("window closed") end
+  end)
+
+  loginWV:url(TARGET_URL)
+  loginWV:show()
+  loginWV:bringToFront()
 end
 
 local function rmTree(path)
