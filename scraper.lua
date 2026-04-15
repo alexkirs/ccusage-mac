@@ -581,4 +581,36 @@ function M.inFlight()
   return fetchInProgress
 end
 
+-- Public API for fetcher.lua and other consumers.
+
+-- Run a JavaScript snippet on the persistent WV. Callback receives (result, err).
+function M.runJS(js, cb)
+  if not persistentWV then return cb and cb(nil, "no persistent webview") end
+  persistentWV:evaluateJavaScript(js, cb or function() end)
+end
+M._debugEval = M.runJS  -- legacy alias for the Phase 1 probes
+
+function M.pageState() return pageState end
+function M.hasPersistent() return persistentWV ~= nil end
+function M.lastReloadAt() return lastHardReloadAt end
+
+-- ensureLoaded: callback(ok, errOrNil). Used by fetcher to confirm the WV
+-- is present and the SPA is mounted before injecting our query JS.
+function M.ensureLoaded(onReady)
+  if pageState == "ready" and persistentWV then
+    onReady(true)
+    return
+  end
+  -- Defer to fetch() which does the cold/stale dance and flips pageState.
+  -- The extract result is irrelevant here — only the pageState=ready side
+  -- effect matters for the fetcher path.
+  M.fetch(function(parsed)
+    if parsed.status == "ok" or parsed.status == "needs_login" then
+      onReady(true, parsed.status == "needs_login" and "needs_login" or nil)
+    else
+      onReady(false, parsed.errorMsg)
+    end
+  end)
+end
+
 return M

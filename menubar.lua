@@ -1,5 +1,6 @@
 local state = require("claude_usage.state")
 local scraper = require("claude_usage.scraper")
+local fetcher = require("claude_usage.fetcher")
 local log = hs.logger.new("cu.menubar", hs.settings.get("claude_usage.log_level") or "info")
 
 local M = {}
@@ -180,19 +181,40 @@ local function fiveHourResetRel(s)
   return fmtRel(epoch)
 end
 
+-- Compact "H:MM" countdown for the 5h reset (always under 5 hours).
+local function fmtClock(epoch)
+  if not epoch then return nil end
+  local d = epoch - os.time()
+  if d <= 0 then return "0:00" end
+  local h = math.floor(d / 3600)
+  local m = math.floor((d % 3600) / 60)
+  if h >= 24 then
+    local days = math.floor(h / 24); h = h % 24
+    return string.format("%dd%dh", days, h)
+  end
+  return string.format("%d:%02d", h, m)
+end
+
+local function fiveHourResetClock(s)
+  local w = s.fiveHour
+  if not w then return nil end
+  local epoch = w.resetsAt or toEpoch(w.resetsHuman)
+  if not epoch then return nil end
+  return fmtClock(epoch)
+end
+
 local function run(text, hex)
   return hs.styledtext.new(text, { color = { hex = hex, alpha = 1 } })
 end
 
--- Colored compact title. fh / w are either numbers or "?". `tail` is optional
--- relative-reset text shown in neutral gray after a separator.
-local function compactStyled(g, fh, w, tail)
-  local st = run(g .. " ", glyphColor())
-           .. run(tostring(fh), colorForUsed(fh))
-           .. run("/", NEUTRAL_COLOR)
+-- Tight compact title: "<5h>·<1w>" with optional " H:MM" tail. No leading
+-- glyph in text — the bar is rendered as the menu bar item's icon instead.
+local function compactStyled(fh, w, tail)
+  local st = run(tostring(fh), colorForUsed(fh))
+           .. run("·", NEUTRAL_COLOR)
            .. run(tostring(w), colorForUsed(w))
   if tail and tail ~= "" then
-    st = st .. run(" · " .. tail, NEUTRAL_COLOR)
+    st = st .. run(" " .. tail, NEUTRAL_COLOR)
   end
   return st
 end
@@ -204,14 +226,62 @@ local function formatTitle()
   if s.status == "error" and not s.fiveHour then return "⚠ err" end
   local fh = s.fiveHour and s.fiveHour.percentUsed or "?"
   local w = s.weekly and s.weekly.percentUsed or "?"
-  local g = glyph()
   local fmt = get("format", DEFAULT_FORMAT)
+  -- Labeled / verbose retain the in-text glyph for now (the icon shows alongside).
+  local g = glyph()
   if fmt == "labeled" then return string.format("%s 5h·%s 1w·%s", g, fh, w) end
   if fmt == "verbose" then return string.format("%s 5h %s%% · 1w %s%% used", g, fh, w) end
   if fmt == "compact_reset" then
-    return compactStyled(g, fh, w, fiveHourResetRel(s) or "—")
+    return compactStyled(fh, w, fiveHourResetClock(s) or "—")
   end
-  return compactStyled(g, fh, w, nil)
+  return compactStyled(fh, w, nil)
+end
+
+-- 2px-wide vertical bar that fills bottom-up by percent, drawn via hs.canvas.
+-- Cached by (worstPct, hex) so we don't redraw an identical icon every tick.
+local ICON_W, ICON_H = 5, 16
+local _iconCache = {}
+local function progressBarIcon(pctUsed, hex)
+  if type(pctUsed) ~= "number" then return nil end
+  local pct = math.max(0, math.min(100, pctUsed))
+  local fillH = math.floor(pct * ICON_H / 100 + 0.5)
+  local cacheKey = fillH .. ":" .. hex
+  if _iconCache[cacheKey] then return _iconCache[cacheKey] end
+  local canvas = hs.canvas.new({ x = 0, y = 0, w = ICON_W, h = ICON_H })
+  -- Faint background so the bar's outline is visible at 0% too.
+  canvas:appendElements({
+    type = "rectangle",
+    frame = { x = 1, y = 0, w = 2, h = ICON_H },
+    fillColor = { white = 0.5, alpha = 0.18 },
+    strokeWidth = 0,
+  })
+  if fillH > 0 then
+    canvas:appendElements({
+      type = "rectangle",
+      frame = { x = 1, y = ICON_H - fillH, w = 2, h = fillH },
+      fillColor = { hex = hex, alpha = 1 },
+      strokeWidth = 0,
+    })
+  end
+  local img = canvas:imageFromCanvas()
+  canvas:delete()
+  _iconCache[cacheKey] = img
+  -- Bound the cache; one entry per (fillH × bucket) is at most ~64.
+  if next(_iconCache) and #_iconCache > 256 then _iconCache = {} end
+  return img
+end
+
+local function currentBarIcon()
+  local s = state.data
+  if s.status ~= "ok" or not s.fiveHour or not s.weekly then return nil end
+  local worst = math.max(s.fiveHour.percentUsed or 0, s.weekly.percentUsed or 0)
+  return progressBarIcon(worst, colorForUsed(worst))
+end
+
+local function applyTitle()
+  if not M.bar then return end
+  M.bar:setIcon(currentBarIcon(), false)
+  M.bar:setTitle(formatTitle())
 end
 
 local function resetStr(win)
@@ -227,12 +297,8 @@ local function resetStr(win)
 end
 
 local function refresh()
-  if scraper.inFlight() then
-    log.d("refresh requested but fetch in flight")
-    return
-  end
-  log.d("refresh")
-  scraper.fetch(function(parsed)
+  log.d("refresh (fetcher path)")
+  fetcher.fetch(function(parsed)
     -- Clear per-fetch fields so stale values don't leak across refreshes.
     state.data.warnings = nil
     state.data.weeklySonnet = nil
@@ -240,7 +306,7 @@ local function refresh()
     state.data.weeklyHaiku = nil
     state.data.spend = nil
     for k, v in pairs(parsed) do state.data[k] = v end
-    if M.bar then M.bar:setTitle(formatTitle()) end
+    applyTitle()
   end)
 end
 
@@ -326,7 +392,7 @@ local function buildFullMenu()
       checked = get("format", DEFAULT_FORMAT) == f,
       fn = function()
         set("format", f)
-        if M.bar then M.bar:setTitle(formatTitle()) end
+        applyTitle()
       end,
     })
   end
@@ -348,7 +414,7 @@ local function buildFullMenu()
     { title = "Force re-fetch now (warm)", fn = refresh },
     { title = "Reload page now (hard)", fn = function() scraper.forceReload(function(p)
         for k, v in pairs(p) do state.data[k] = v end
-        if M.bar then M.bar:setTitle(formatTitle()) end
+        applyTitle()
       end) end },
     { title = "Destroy persistent webview", fn = function()
         scraper.destroyPersistent()
@@ -392,8 +458,8 @@ local function buildFullMenu()
     { title = "Reload module (hot)", fn = function()
         M.stop()
         for _, mod in ipairs({ "claude_usage", "claude_usage.menubar",
-                               "claude_usage.scraper", "claude_usage.parser",
-                               "claude_usage.state" }) do
+                               "claude_usage.fetcher", "claude_usage.scraper",
+                               "claude_usage.parser", "claude_usage.state" }) do
           package.loaded[mod] = nil
         end
         require("claude_usage")
@@ -440,7 +506,7 @@ function M.start()
   M.fetchTimer = hs.timer.doEvery(60, function() refresh() end)
   -- Cheap tick so "last fetch Xs ago" and glyph stay current without a fetch.
   M.titleTimer = hs.timer.doEvery(15, function()
-    if M.bar then M.bar:setTitle(formatTitle()) end
+    applyTitle()
   end)
   log.i("started v" .. M.VERSION)
   state.log("i", "started v" .. M.VERSION)
