@@ -495,33 +495,27 @@ local function buildFullMenu()
     local eu = s.extraUsage
     table.insert(items, { title = "-" })
     table.insert(items, { title = "Extra usage", disabled = true })
-    if eu.isEnabled then
-      -- System labelColor adapts to light/dark; reads as near-white on the
-      -- dark menu / near-black on light. Overrides the dim look disabled
-      -- rows normally get, so active usage stands out.
-      local usageLine = "    " .. fmtMoney(eu.usedCredits, eu.currency)
-             .. " / " .. fmtMoney(eu.monthlyLimit, eu.currency)
-             .. (eu.utilization and string.format(" (%d%%)", eu.utilization) or "")
-      table.insert(items, {
-        title = hs.styledtext.new(usageLine, { color = { list = "System", name = "labelColor" } }),
-        disabled = true,
-      })
-      table.insert(items, {
-        title = hs.styledtext.new("    status: ", { color = { hex = NEUTRAL_COLOR, alpha = 1 } })
-             .. hs.styledtext.new("on", { color = { hex = BUCKET_COLOR.safe, alpha = 1 } }),
-        disabled = true,
-      })
-      table.insert(items, { title = "Disable extra usage", fn = toggleExtraUsage })
-    else
-      table.insert(items, { title = "    status: off", disabled = true })
-      if eu.monthlyLimit then
-        table.insert(items, {
-          title = "    configured cap: " .. fmtMoney(eu.monthlyLimit, eu.currency),
-          disabled = true,
-        })
-      end
-      table.insert(items, { title = "Enable extra usage", fn = toggleExtraUsage })
-    end
+    local usageLine = "    " .. fmtMoney(eu.usedCredits, eu.currency)
+           .. " / " .. fmtMoney(eu.monthlyLimit, eu.currency)
+           .. (eu.utilization and string.format(" (%d%%)", eu.utilization) or "")
+    local lineColor = eu.isEnabled
+          and { list = "System", name = "labelColor" }
+          or  { hex = NEUTRAL_COLOR, alpha = 1 }
+    local statusText  = eu.isEnabled and "on" or "off"
+    local statusColor = eu.isEnabled and BUCKET_COLOR.safe or NEUTRAL_COLOR
+    table.insert(items, {
+      title = hs.styledtext.new(usageLine, { color = lineColor }),
+      disabled = true,
+    })
+    table.insert(items, {
+      title = hs.styledtext.new("    status: ", { color = lineColor })
+           .. hs.styledtext.new(statusText, { color = { hex = statusColor, alpha = 1 } }),
+      disabled = true,
+    })
+    table.insert(items, {
+      title = eu.isEnabled and "Disable extra usage" or "Enable extra usage",
+      fn = toggleExtraUsage,
+    })
   end
 
   -- Warnings (fetcher surfaces actionable strings here).
