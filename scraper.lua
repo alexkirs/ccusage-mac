@@ -376,17 +376,66 @@ local function pathCold(t0, onDone)
   persistentWV:url(TARGET_URL)
 end
 
+-- Busts the SPA's React Query IndexedDB cache before reloading, so the page
+-- re-fetches usage data from Anthropic's backend on mount instead of
+-- re-showing the stale cached values. Only used for reset-passed reloads —
+-- ordinary 15-min safety reloads don't need to invalidate the cache.
+local IDB_BUST_AND_RELOAD_JS = [[
+(function(){
+  try {
+    var req = indexedDB.open('keyval-store');
+    req.onsuccess = function(){
+      var db = req.result;
+      try {
+        var tx = db.transaction('keyval','readwrite');
+        tx.objectStore('keyval').delete('react-query-cache');
+        tx.oncomplete = function(){ db.close(); location.reload(); };
+        tx.onerror    = function(){ db.close(); location.reload(); };
+      } catch (e) { db.close(); location.reload(); }
+    };
+    req.onerror = function(){ location.reload(); };
+  } catch (e) { location.reload(); }
+})()
+]]
+
 local function pathStale(t0, onDone, reason)
   log.i("stale path — reloading (" .. (reason or "?") .. ")")
   state.log("i", "stale path: " .. (reason or "?"))
   if not persistentWV then return pathCold(t0, onDone) end
   pageState = "loading"
   lastHardReloadAt = hs.timer.secondsSinceEpoch()
+  -- When a reset just passed, the SPA's own cache is also stale; wipe the
+  -- React Query IDB entry so it refetches from the server on mount.
+  -- Anchors for the affected windows are cleared so a fresh text establishes
+  -- a fresh anchor rather than being recognised as "unchanged".
+  local bustCache = reason and reason:find("reset passed", 1, true) ~= nil
+  if bustCache then
+    resetAnchors = {}
+  end
   pendingNav = {
     onFinish = function(_) startContentPoll(t0, onDone) end,
     onFail = function(m) completeFetch(t0, { status = "error", errorMsg = m }, nil, onDone) end,
   }
-  persistentWV:reload()
+  if bustCache then
+    persistentWV:evaluateJavaScript(IDB_BUST_AND_RELOAD_JS, function(_, _) end)
+  else
+    persistentWV:reload()
+  end
+end
+
+-- A reset whose timestamp has already passed (with a small jitter grace)
+-- means the SPA's cache is behind the server. Triggers a cache-busting
+-- reload so the numbers catch up.
+local RESET_GRACE_S = 10
+local function firstPassedReset(parsed)
+  local now = os.time() - RESET_GRACE_S
+  for _, key in ipairs(ANCHORED_KEYS) do
+    local w = parsed[key]
+    if w and w.resetsAt and w.resetsAt <= now then
+      return key
+    end
+  end
+  return nil
 end
 
 local function pathWarm(t0, onDone)
@@ -401,6 +450,11 @@ local function pathWarm(t0, onDone)
       needsReload = true; reason = "warm extract error: " .. tostring(parsed.errorMsg)
     elseif parsed.status == "ok" and not parsed.fiveHour and not parsed.weekly then
       needsReload = true; reason = "warm extract empty"
+    elseif parsed.status == "ok" then
+      local passed = firstPassedReset(parsed)
+      if passed then
+        needsReload = true; reason = passed .. " reset passed, data stale"
+      end
     end
     if needsReload then
       log.w("warm→stale: " .. reason)
