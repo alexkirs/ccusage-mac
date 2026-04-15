@@ -276,9 +276,12 @@ function M.interactiveLogin(onClosed)
     if action == "closing" then onLoginSuccess("window closed") end
   end)
 
-  -- Periodic URL tick while the window is alive. Catches pushState/hash
-  -- changes that navigationCallback doesn't fire on, and tells us exactly
-  -- where a spinner is stuck.
+  -- Periodic URL tick while the window is alive. Doubles as the canonical
+  -- success-detector because hs.webview's didFinishNavigation doesn't fire
+  -- for every pushState/client-side route (observed: a Google OAuth flow
+  -- landing on claude.ai/new never raised didFinishNavigation, only the
+  -- tick saw the URL change). Anywhere we see an authed claude.ai URL we
+  -- call onLoginSuccess, regardless of which event path reported it.
   local urlTick
   local lastTickURL = nil
   urlTick = hs.timer.doEvery(1, function()
@@ -291,6 +294,10 @@ function M.interactiveLogin(onClosed)
       loginLog("tick url=%s", u)
       lastTickURL = u
     end
+    if isAuthedUrl(u) then
+      onLoginSuccess("tick authed url: " .. u)
+      if urlTick then urlTick:stop(); urlTick = nil end
+    end
   end)
 
   loginWV:url(TARGET_URL)
@@ -301,11 +308,6 @@ function M.interactiveLogin(onClosed)
   -- without making it sit above other apps' windows.
   pcall(function() hs.application.launchOrFocus("Hammerspoon") end)
   loginLog("shown; initial url=%s", loginWV:url() or "?")
-
-  -- Friendly hint: Google's GSI uses popup + opener.postMessage. If hs.webview
-  -- refuses to actually create the popup, Google will hang on "One moment…".
-  -- In that case users should fall back to email login.
-  hs.alert.show("Tip: if Google sign-in hangs, use 'Continue with email' instead", 5)
 end
 
 local function rmTree(path)
