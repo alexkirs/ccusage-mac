@@ -222,9 +222,11 @@ end
 
 local function currentBarIcon()
   local s = state.data
-  if s.status ~= "ok" or not s.fiveHour or not s.weekly then return nil end
-  local worst = math.max(s.fiveHour.percentUsed or 0, s.weekly.percentUsed or 0)
-  return progressBarIcon(worst, colorForUsed(worst))
+  if s.status ~= "ok" or not s.fiveHour then return nil end
+  -- Bar tracks the 5h window only — that's the near-term limit the user
+  -- is pacing against. Weekly is shown numerically in the title.
+  local pct = s.fiveHour.percentUsed or 0
+  return progressBarIcon(pct, colorForUsed(pct))
 end
 
 local function applyTitle()
