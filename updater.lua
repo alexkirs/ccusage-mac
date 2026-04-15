@@ -31,8 +31,10 @@ end
 
 local function trim(s) return (s:gsub("^%s+", ""):gsub("%s+$", "")) end
 
--- Public synchronous snapshot for menu rendering.
+-- Public synchronous snapshot for menu rendering. Kicks a rate-limited
+-- async refresh so the next call reflects current git state.
 function M.status()
+  M.refreshLocal()
   return {
     sha          = M.cachedSha,
     behind       = get("behind", 0),
@@ -53,6 +55,7 @@ end
 local MIN_CHECK_INTERVAL = 30
 function M.checkNow(cb)
   cb = cb or function() end
+  M.refreshLocal()  -- so auto-apply sees fresh dirty state
   if M.checking then return cb(M.status()) end
   local last = get("lastCheck", 0) or 0
   if os.time() - last < MIN_CHECK_INTERVAL and not M.forceCheck then
@@ -128,8 +131,15 @@ function M.apply(cb)
   end)
 end
 
--- Cache short SHA + dirty bit once at start; refresh after apply (reload anyway).
+-- Cache short SHA + dirty bit. Called from M.start(), M.status() on every
+-- menu build, and M.checkNow() before auto-apply decisions. Rate-limited
+-- to once per 10 s so rapid menu opens don't fork `git status` in a loop.
+local lastRefresh = 0
+local REFRESH_COOLDOWN = 10
 local function refreshLocal()
+  local now = os.time()
+  if now - lastRefresh < REFRESH_COOLDOWN then return end
+  lastRefresh = now
   git({ "rev-parse", "--short", "HEAD" }, function(ok, out)
     if ok then M.cachedSha = trim(out) end
   end)
@@ -137,6 +147,7 @@ local function refreshLocal()
     M.cachedDirty = ok and trim(out) ~= ""
   end)
 end
+M.refreshLocal = refreshLocal
 
 -- Live reload: watch *.lua under the repo, debounced 300 ms. Ignores .git/.
 local function startLiveReload()
