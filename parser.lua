@@ -77,9 +77,13 @@ end
 -- Shape → epoch conversion
 ---------------------------------------------------------------------
 
-local function parseDuration(s)
+-- Number of seconds encoded by a duration string ("1 hr 15 min", "now", ...).
+-- Separate from parseDuration so the scraper can re-anchor the epoch when the
+-- source string is stale (SPA holds its "Resets in X" text fixed between
+-- server polls; we add X to the first-observed moment, not to every read).
+function M._durationSecs(s)
   if not s then return nil end
-  if s:lower():match("^now$") then return os.time() end
+  if s:lower():match("^now$") then return 0 end
   local secs, matched = 0, false
   for n, unit in s:gmatch("(%d+)%s*(%a+)") do
     local num, u = tonumber(n), unit:lower()
@@ -91,7 +95,12 @@ local function parseDuration(s)
       end
     end
   end
-  return matched and (os.time() + secs) or nil
+  return matched and secs or nil
+end
+
+local function parseDuration(s)
+  local secs = M._durationSecs(s)
+  return secs and (os.time() + secs) or nil
 end
 
 local function parseWeekdayClock(s)

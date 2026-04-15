@@ -21,6 +21,11 @@ local pageState = "cold"   -- "cold" | "loading" | "ready" | "needs_login"
 local lastHardReloadAt = 0
 local lastExtractMs = 0
 
+-- Anchor duration-based reset strings to the first time we observed them, so
+-- warm extracts that re-read a stale "Resets in X min" text still count down.
+-- Keyed by window slot; { human = "1 hr 15 min", at = os.time() }.
+local resetAnchors = {}
+
 local fetchInProgress = false
 local fetchTimeoutTimer = nil
 local contentPollTimer = nil
@@ -252,6 +257,29 @@ end
 -- Fetch paths
 ---------------------------------------------------------------------
 
+-- For windows whose reset string is a duration ("1 hr 15 min"), replace the
+-- parser's now-anchored resetsAt with one anchored at the first time we saw
+-- that exact text. Weekday+time and month+date resets are absolute and need
+-- no adjustment.
+local ANCHORED_KEYS = { "fiveHour", "weekly", "weeklySonnet", "weeklyOpus", "weeklyHaiku" }
+local function applyResetAnchors(parsed)
+  if parsed.status ~= "ok" then return end
+  local now = os.time()
+  for _, key in ipairs(ANCHORED_KEYS) do
+    local win = parsed[key]
+    if win and win.resetsHuman and parser._looksDuration(win.resetsHuman) then
+      local secs = parser._durationSecs(win.resetsHuman)
+      local prev = resetAnchors[key]
+      if prev and prev.human == win.resetsHuman and secs then
+        win.resetsAt = prev.at + secs
+      else
+        resetAnchors[key] = { human = win.resetsHuman, at = now }
+        -- resetsAt already = now + secs (parser's default); leave as-is.
+      end
+    end
+  end
+end
+
 -- All three paths funnel through this once the parser has produced a result.
 local function completeFetch(t0, parsed, rawForArtifacts, onDone)
   if fetchTimeoutTimer then fetchTimeoutTimer:stop(); fetchTimeoutTimer = nil end
@@ -263,6 +291,7 @@ local function completeFetch(t0, parsed, rawForArtifacts, onDone)
   local summary = string.format("fetch done status=%s dt=%dms pageState=%s",
     parsed.status or "?", dt, pageState)
   log.i(summary); state.log("i", summary)
+  applyResetAnchors(parsed)
   saveArtifacts(rawForArtifacts or {}, parsed, parsed.status == "ok")
   fetchInProgress = false
   parsed.lastFetch = os.time()
