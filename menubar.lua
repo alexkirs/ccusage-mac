@@ -27,20 +27,59 @@ local function set(k, v)
   hs.settings.set(NS .. k, v)
 end
 
+-- Shared thresholds drive both the glyph shape and the number color so the
+-- signals can't disagree. Numbers are "% used" — higher = worse.
+local THRESHOLDS = { watch = 50, careful = 70, danger = 85 }
+
+local BUCKET_GLYPH = {
+  safe = "●",
+  watch = "◐",
+  careful = "◔",
+  danger = "○",
+}
+
+-- Tailwind -500 family: readable on both light and dark menu bar backgrounds.
+local BUCKET_COLOR = {
+  safe    = "#10B981",   -- emerald-500
+  watch   = "#F59E0B",   -- amber-500
+  careful = "#F97316",   -- orange-500
+  danger  = "#EF4444",   -- red-500
+}
+local NEUTRAL_COLOR = "#9CA3AF"  -- gray-400, for separators like "/" and reset text
+
+local function bucketFor(pctUsed)
+  if type(pctUsed) ~= "number" then return nil end
+  if pctUsed >= THRESHOLDS.danger then return "danger"
+  elseif pctUsed >= THRESHOLDS.careful then return "careful"
+  elseif pctUsed >= THRESHOLDS.watch then return "watch"
+  else return "safe" end
+end
+
+local function colorForUsed(pctUsed)
+  local b = bucketFor(pctUsed)
+  return b and BUCKET_COLOR[b] or NEUTRAL_COLOR
+end
+
 local function glyph()
   local s = state.data
   if s.status == "needs_login" then return "⚠" end
-  if s.status == "error" and not s.fiveHour then return "⚠" end
+  if (s.status == "error") and not s.fiveHour then return "⚠" end
   if s.status == "init" then return "…" end
   if s.warnings and #s.warnings > 0 then return "⚠" end
-  -- Worst window = highest % used.
   local fh = s.fiveHour and s.fiveHour.percentUsed or 0
   local w = s.weekly and s.weekly.percentUsed or 0
-  local worst = math.max(fh, w)
-  if worst >= 95 then return "○"
-  elseif worst >= 80 then return "◔"
-  elseif worst >= 50 then return "◐"
-  else return "●" end
+  local b = bucketFor(math.max(fh, w)) or "safe"
+  return BUCKET_GLYPH[b]
+end
+
+local function glyphColor()
+  local s = state.data
+  if s.status == "needs_login" then return BUCKET_COLOR.danger end
+  if (s.status == "error") and not s.fiveHour then return BUCKET_COLOR.danger end
+  if s.warnings and #s.warnings > 0 then return BUCKET_COLOR.danger end
+  local fh = s.fiveHour and s.fiveHour.percentUsed or 0
+  local w = s.weekly and s.weekly.percentUsed or 0
+  return colorForUsed(math.max(fh, w))
 end
 
 local function humanAgo(epoch)
@@ -132,6 +171,23 @@ local function fiveHourResetRel(s)
   return fmtRel(epoch)
 end
 
+local function run(text, hex)
+  return hs.styledtext.new(text, { color = { hex = hex, alpha = 1 } })
+end
+
+-- Colored compact title. fh / w are either numbers or "?". `tail` is optional
+-- relative-reset text shown in neutral gray after a separator.
+local function compactStyled(g, fh, w, tail)
+  local st = run(g .. " ", glyphColor())
+           .. run(tostring(fh), colorForUsed(fh))
+           .. run("/", NEUTRAL_COLOR)
+           .. run(tostring(w), colorForUsed(w))
+  if tail and tail ~= "" then
+    st = st .. run(" · " .. tail, NEUTRAL_COLOR)
+  end
+  return st
+end
+
 local function formatTitle()
   local s = state.data
   if s.status == "needs_login" then return "⚠ login" end
@@ -144,10 +200,9 @@ local function formatTitle()
   if fmt == "labeled" then return string.format("%s 5h·%s 1w·%s", g, fh, w) end
   if fmt == "verbose" then return string.format("%s 5h %s%% · 1w %s%% used", g, fh, w) end
   if fmt == "compact_reset" then
-    local rel = fiveHourResetRel(s) or "—"
-    return string.format("%s %s/%s · %s", g, fh, w, rel)
+    return compactStyled(g, fh, w, fiveHourResetRel(s) or "—")
   end
-  return string.format("%s %s/%s", g, fh, w)
+  return compactStyled(g, fh, w, nil)
 end
 
 local function resetStr(win)
