@@ -27,16 +27,17 @@ local function set(k, v)
   hs.settings.set(NS .. k, v)
 end
 
--- Shared thresholds drive both the glyph shape and the number color so the
--- signals can't disagree. Numbers are "% used" — higher = worse.
+-- Numbers are "% used" — higher = worse.
+-- Thresholds drive the color bucket (4 levels). Bar glyphs use a finer 8-level
+-- scale for a smoother visual fill.
 local THRESHOLDS = { watch = 50, careful = 70, danger = 85 }
 
-local BUCKET_GLYPH = {
-  safe = "●",
-  watch = "◐",
-  careful = "◔",
-  danger = "○",
-}
+-- Block-meter family U+2581..U+2587. All seven sit on the baseline and rise
+-- upward to a consistent height, so the menu bar line-box renders them with
+-- matching ascender. The full block U+2588 is deliberately dropped — it spans
+-- the entire cell (ascender→descender) and gets visually clipped in the
+-- narrow menu bar band, looking inconsistent next to ▇.
+local BARS = { "▁", "▂", "▃", "▄", "▅", "▆", "▇" }
 
 -- Tailwind -500 family: readable on both light and dark menu bar backgrounds.
 local BUCKET_COLOR = {
@@ -60,6 +61,14 @@ local function colorForUsed(pctUsed)
   return b and BUCKET_COLOR[b] or NEUTRAL_COLOR
 end
 
+local function barFor(pctUsed)
+  if type(pctUsed) ~= "number" then return "·" end
+  -- 0 → ▁, 100 → ▇, linear across 7 bins.
+  local level = math.floor(pctUsed * 7 / 100) + 1
+  if level < 1 then level = 1 elseif level > 7 then level = 7 end
+  return BARS[level]
+end
+
 local function glyph()
   local s = state.data
   if s.status == "needs_login" then return "⚠" end
@@ -68,8 +77,7 @@ local function glyph()
   if s.warnings and #s.warnings > 0 then return "⚠" end
   local fh = s.fiveHour and s.fiveHour.percentUsed or 0
   local w = s.weekly and s.weekly.percentUsed or 0
-  local b = bucketFor(math.max(fh, w)) or "safe"
-  return BUCKET_GLYPH[b]
+  return barFor(math.max(fh, w))
 end
 
 local function glyphColor()
