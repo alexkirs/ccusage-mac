@@ -308,20 +308,23 @@ local function toggleExtraUsage()
   local before = state.data.extraUsage and state.data.extraUsage.isEnabled
   local desired = not before
   log.i("toggle extra usage: " .. tostring(before) .. " → " .. tostring(desired))
+  -- Instant feedback — PUT takes 2–5s, alert covers the gap.
+  hs.alert.show("Extra usage: updating to " .. (desired and "on" or "off") .. "…", 2)
   local token = string.format("%d_%d", os.time(), math.random(1000000))
   local js = string.format(TOGGLE_EXTRA_JS_TEMPLATE, token, orgUuid, tostring(desired))
   data.runJS(js, function() end)
 
+  -- PUT /overage_spend_limit has measured round-trips of 2–5s. Cap the
+  -- poll generously; on timeout, trigger a refresh rather than marking it
+  -- failed — the mutation often landed server-side, next fetch confirms.
   local tries = 0
   local poll
   poll = hs.timer.doEvery(0.2, function()
     tries = tries + 1
-    if tries > 25 then
+    if tries > 75 then  -- 15s cap
       poll:stop()
-      hs.alert.show("Extra usage toggle timed out")
-      state.data.warnings = state.data.warnings or {}
-      table.insert(state.data.warnings, "Extra usage PUT timed out after 5 s")
-      applyTitle()
+      log.w("toggle poll timed out; refreshing to confirm actual state")
+      refresh()
       return
     end
     data.runJS(TOGGLE_READ_JS, function(resultStr)
@@ -343,6 +346,7 @@ local function toggleExtraUsage()
       end
       if state.data.extraUsage then state.data.extraUsage.isEnabled = desired end
       applyTitle()
+      hs.alert.show("Extra usage " .. (desired and "on" or "off"))
       refresh()
     end)
   end)
