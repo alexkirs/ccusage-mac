@@ -1,6 +1,7 @@
 local state = require("claude_usage.state")
 local scraper = require("claude_usage.scraper")
 local fetcher = require("claude_usage.fetcher")
+local updater = require("claude_usage.updater")
 local log = hs.logger.new("cu.menubar", hs.settings.get("claude_usage.log_level") or "info")
 
 local M = {}
@@ -491,6 +492,10 @@ local function buildFullMenu()
   end
 
   -- Extra usage (overage) block.
+  -- When enabled: render with system labelColor + green "on" so it reads as active.
+  -- When disabled: pass plain strings so NSMenu applies its own dimmed/disabled
+  -- styling, matching the other window rows (explicit gray hex draws solid and
+  -- looks active by comparison).
   if s.extraUsage then
     local eu = s.extraUsage
     table.insert(items, { title = "-" })
@@ -498,20 +503,21 @@ local function buildFullMenu()
     local usageLine = "    " .. fmtMoney(eu.usedCredits, eu.currency)
            .. " / " .. fmtMoney(eu.monthlyLimit, eu.currency)
            .. (eu.utilization and string.format(" (%d%%)", eu.utilization) or "")
-    local lineColor = eu.isEnabled
-          and { list = "System", name = "labelColor" }
-          or  { hex = NEUTRAL_COLOR, alpha = 1 }
-    local statusText  = eu.isEnabled and "on" or "off"
-    local statusColor = eu.isEnabled and BUCKET_COLOR.safe or NEUTRAL_COLOR
-    table.insert(items, {
-      title = hs.styledtext.new(usageLine, { color = lineColor }),
-      disabled = true,
-    })
-    table.insert(items, {
-      title = hs.styledtext.new("    status: ", { color = lineColor })
-           .. hs.styledtext.new(statusText, { color = { hex = statusColor, alpha = 1 } }),
-      disabled = true,
-    })
+    if eu.isEnabled then
+      local labelColor = { list = "System", name = "labelColor" }
+      table.insert(items, {
+        title = hs.styledtext.new(usageLine, { color = labelColor }),
+        disabled = true,
+      })
+      table.insert(items, {
+        title = hs.styledtext.new("    status: ", { color = labelColor })
+             .. hs.styledtext.new("on", { color = { hex = BUCKET_COLOR.safe, alpha = 1 } }),
+        disabled = true,
+      })
+    else
+      table.insert(items, { title = usageLine, disabled = true })
+      table.insert(items, { title = "    status: off", disabled = true })
+    end
     table.insert(items, {
       title = eu.isEnabled and "Disable extra usage" or "Enable extra usage",
       fn = toggleExtraUsage,
@@ -553,6 +559,82 @@ local function buildFullMenu()
   end
   table.insert(items, { title = "Display format", menu = fmtItems })
 
+  -- Updater section.
+  local us = updater.status()
+  if us.behind and us.behind > 0 and not us.dev then
+    table.insert(items, {
+      title = hs.styledtext.new(
+        string.format("⬆ Update available (%d commit%s) · Apply & reload",
+          us.behind, us.behind == 1 and "" or "s"),
+        { color = { hex = BUCKET_COLOR.safe, alpha = 1 } }),
+      fn = function() updater.apply() end,
+    })
+  end
+  local upItems = {
+    { title = us.checking and "Checking…" or "Check for updates now",
+      disabled = us.checking,
+      fn = function()
+        updater.forceCheck = true
+        hs.alert.show("Checking for updates…")
+        updater.checkNow(function(st)
+          if st.error then
+            hs.alert.show("Check failed: " .. st.error)
+          elseif (st.behind or 0) == 0 then
+            hs.alert.show("Up to date")
+          else
+            hs.alert.show(string.format("%d update%s available",
+              st.behind, st.behind == 1 and "" or "s"))
+          end
+        end)
+      end },
+  }
+  if us.behind and us.behind > 0 and not us.dev then
+    table.insert(upItems, { title = "Apply update & reload",
+      disabled = us.updating,
+      fn = function() updater.apply() end })
+    if us.subjects and #us.subjects > 0 then
+      table.insert(upItems, { title = "-" })
+      table.insert(upItems, { title = "New commits:", disabled = true })
+      for i, subj in ipairs(us.subjects) do
+        if i > 10 then break end
+        table.insert(upItems, { title = "    • " .. subj:sub(1, 80), disabled = true })
+      end
+    end
+  end
+  table.insert(upItems, { title = "-" })
+  table.insert(upItems, {
+    title = "Check daily",
+    checked = us.autoCheck,
+    disabled = us.dev,
+    fn = function() updater.setAutoCheck(not us.autoCheck) end,
+  })
+  table.insert(upItems, {
+    title = "Auto-apply updates",
+    checked = us.autoApply,
+    disabled = us.dev,
+    fn = function() updater.setAutoApply(not us.autoApply) end,
+  })
+  if us.dev then
+    table.insert(upItems, {
+      title = "Dev live-reload (watch .lua)",
+      checked = us.devWatch,
+      fn = function() updater.setDevWatch(not us.devWatch) end,
+    })
+  end
+  table.insert(upItems, { title = "-" })
+  local last = us.lastCheck and humanAgo(us.lastCheck) or "never"
+  table.insert(upItems, { title = "Last check: " .. last, disabled = true })
+  if us.dev then
+    table.insert(upItems, { title = "Install: dev symlink (no remote updates)", disabled = true })
+  end
+  if us.dirty then
+    table.insert(upItems, { title = "⚠ Working tree dirty — apply blocked", disabled = true })
+  end
+  if us.error then
+    table.insert(upItems, { title = "⚠ " .. us.error:sub(1, 100), disabled = true })
+  end
+  table.insert(items, { title = "Updates", menu = upItems })
+
   -- Debug submenu — slim now that the innerText path is gone.
   local debugItems = {
     { title = "Open Hammerspoon console", fn = function() hs.openConsole() end },
@@ -593,7 +675,7 @@ local function buildFullMenu()
         M.stop()
         for _, mod in ipairs({ "claude_usage", "claude_usage.menubar",
                                "claude_usage.fetcher", "claude_usage.scraper",
-                               "claude_usage.state" }) do
+                               "claude_usage.state", "claude_usage.updater" }) do
           package.loaded[mod] = nil
         end
         require("claude_usage")
@@ -610,7 +692,11 @@ local function buildFullMenu()
   table.insert(items, { title = "Debug", menu = debugItems })
 
   table.insert(items, { title = "-" })
-  table.insert(items, { title = "About claude-usage v" .. M.VERSION, disabled = true })
+  local aboutUs = updater.status()
+  local verLine = "About claude-usage v" .. M.VERSION
+  if aboutUs.sha then verLine = verLine .. " · " .. aboutUs.sha end
+  if aboutUs.dev then verLine = verLine .. " · dev" end
+  table.insert(items, { title = verLine, disabled = true })
   table.insert(items, { title = "    " .. os.getenv("HOME") .. "/.hammerspoon/claude_usage", disabled = true })
   table.insert(items, { title = "Quit", fn = function() M.stop() end })
 
@@ -636,6 +722,7 @@ function M.start()
     return buildFullMenu()
   end)
 
+  updater.start()
   refresh()
   M.fetchTimer = hs.timer.doEvery(60, function() refresh() end)
   -- Cheap tick so "last fetch Xs ago" and glyph stay current without a fetch.
@@ -652,6 +739,7 @@ function M.stop()
   if M.fetchTimer then M.fetchTimer:stop(); M.fetchTimer = nil end
   if M.titleTimer then M.titleTimer:stop(); M.titleTimer = nil end
   if M.bar then M.bar:delete(); M.bar = nil end
+  updater.stop()
   -- Drop the long-lived webview too, so a module reload starts cold.
   scraper.destroyPersistent()
 end
