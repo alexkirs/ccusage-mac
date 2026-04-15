@@ -136,7 +136,10 @@ local FETCH_JS_TEMPLATE = [[
   window.__cu = window.__cu || {};
   window.__cu.lastFetch = {stage:"starting", token: TOKEN};
 
-  if (/\/(login|auth|sign-in)/.test(location.href)) {
+  function isLoginUrl() {
+    return /\/(login|auth|sign-in|signin)/.test(location.href);
+  }
+  if (isLoginUrl()) {
     window.__cu.lastFetch = {stage:"done", token: TOKEN, needsLogin: true};
     return;
   }
@@ -230,6 +233,14 @@ local FETCH_JS_TEMPLATE = [[
   }
 
   function waitAndStart() {
+    // Re-check on each retry: claude.ai's SPA does client-side auth routing,
+    // so the redirect from /settings/usage to /login can land well after
+    // didFinishNavigation fires. Without re-checking we wait the full 6 s
+    // and report "SPA never mounted" instead of "needs login".
+    if (isLoginUrl()) {
+      window.__cu.lastFetch = {stage:"done", token: TOKEN, needsLogin: true};
+      return;
+    }
     var err = tryFindQc();
     if (!window.__cu.qc) {
       if (Date.now() < deadline) { setTimeout(waitAndStart, 200); return; }
