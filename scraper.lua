@@ -343,19 +343,40 @@ function M.clearCookies()
   for _, p in ipairs(webkitPaths()) do rmSync(p) end
 end
 
--- Log out: destroy webview, wipe cookies, relaunch Hammerspoon so the next
--- boot has no session and prompts for login. WebKit keeps cookies in process
--- memory, so a Lua reload alone isn't enough — we must restart the app.
--- Order matters: webview torn down BEFORE rm so no live handle re-writes the
--- file, rm is synchronous, THEN relaunch + exit.
+-- Log out: destroy webview, wipe cookies, force-restart Hammerspoon.
+--
+-- os.exit(0) alone was unreliable here — when it didn't fully terminate the
+-- process (observed after back-to-back logouts), `open -a Hammerspoon`
+-- just re-focused the still-running app and WebKit served the in-memory
+-- cookies as if nothing happened. Fix: spawn a detached shell script that
+--   1) waits briefly for this function to return,
+--   2) runs `killall Hammerspoon` from OUTSIDE the process (so it can't
+--      be skipped by a timer going stale on reload),
+--   3) wipes the cookie paths a SECOND time after the app is dead, so any
+--      in-flight writes during shutdown can't re-materialise the session,
+--   4) relaunches Hammerspoon.
+-- The background script survives parent death (reparented to launchd).
 function M.logout()
-  log.i("logout: destroying webview + wiping cookies + relaunching")
+  log.i("logout: destroying webview + wiping cookies + force-relaunching")
   state.log("i", "logout requested")
   M.destroyPersistent()
   for _, p in ipairs(webkitPaths()) do rmSync(p) end
+
+  local quotedRms = {}
+  for _, p in ipairs(webkitPaths()) do
+    table.insert(quotedRms, "/bin/rm -rf " .. string.format("%q", p))
+  end
+  local script = table.concat({
+    "sleep 0.8",
+    "killall Hammerspoon 2>/dev/null",
+    "sleep 1",
+    table.concat(quotedRms, "; "),
+    "/usr/bin/open -a Hammerspoon",
+  }, "; ")
+  log.i("logout: scheduling " .. script)
+  hs.execute("nohup /bin/bash -c " .. string.format("%q", script)
+          .. " >/tmp/claude_usage_logout.log 2>&1 &")
   hs.alert.show("Logging out — Hammerspoon will relaunch")
-  hs.execute("nohup /bin/bash -c 'sleep 2 && /usr/bin/open -a Hammerspoon' >/dev/null 2>&1 &")
-  hs.timer.doAfter(0.5, function() os.exit(0) end)
 end
 
 return M
