@@ -502,7 +502,11 @@ local function buildFullMenu()
                 .. (eu.utilization and string.format(" (%d%%)", eu.utilization) or ""),
         disabled = true,
       })
-      table.insert(items, { title = "    status: on", disabled = true })
+      table.insert(items, {
+        title = hs.styledtext.new("    status: ", { color = { hex = NEUTRAL_COLOR, alpha = 1 } })
+             .. hs.styledtext.new("on", { color = { hex = BUCKET_COLOR.safe, alpha = 1 } }),
+        disabled = true,
+      })
       table.insert(items, { title = "Disable extra usage", fn = toggleExtraUsage })
     else
       table.insert(items, { title = "    status: off", disabled = true })
