@@ -19,6 +19,24 @@ M.data = {
 M.logRing = {}
 M.fetchTimings = {}
 
+-- Settings wrappers. Every setting the widget owns lives under "claude_usage.*",
+-- so all reads/writes go through here to keep the namespace consistent.
+local NS = "claude_usage."
+
+function M.get(k, default)
+  local v = hs.settings.get(NS .. k)
+  if v == nil then return default end
+  return v
+end
+
+function M.set(k, v) hs.settings.set(NS .. k, v) end
+
+-- Logger factory. Honors the current log_level setting without each module
+-- having to call hs.settings.get itself.
+function M.logger(name)
+  return hs.logger.new("cu." .. name, M.get("log_level", "info"))
+end
+
 function M.log(level, msg)
   local line = os.date("%H:%M:%S") .. " [" .. level .. "] " .. tostring(msg)
   table.insert(M.logRing, line)

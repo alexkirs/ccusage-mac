@@ -3,20 +3,16 @@
 --   symlink (dev)   → skip updates, enable .lua pathwatcher live-reload
 
 local state = require("claude_usage.state")
-local log = hs.logger.new("cu.updater", hs.settings.get("claude_usage.log_level") or "info")
+local log = state.logger("updater")
 
 local M = {}
 
 local HS_DIR = os.getenv("HOME") .. "/.hammerspoon/claude_usage"
-local NS = "claude_usage.update."
 local GIT = "/usr/bin/git"
 
-local function get(k, d)
-  local v = hs.settings.get(NS .. k)
-  if v == nil then return d end
-  return v
-end
-local function set(k, v) hs.settings.set(NS .. k, v) end
+-- Updater lives under the "update." sub-namespace of claude_usage.
+local function get(k, d) return state.get("update." .. k, d) end
+local function set(k, v) state.set("update." .. k, v) end
 
 -- repoPath: resolve symlinks. Used as CWD for all git calls.
 local function repoPath() return hs.fs.pathToAbsolute(HS_DIR) end

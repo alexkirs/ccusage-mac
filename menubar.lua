@@ -1,11 +1,11 @@
 local state = require("claude_usage.state")
-local scraper = require("claude_usage.scraper")
-local fetcher = require("claude_usage.fetcher")
+local data = require("claude_usage.data")
 local updater = require("claude_usage.updater")
-local log = hs.logger.new("cu.menubar", hs.settings.get("claude_usage.log_level") or "info")
+local log = state.logger("menubar")
+local get, set = state.get, state.set
 
 local M = {}
-M.VERSION = "0.1.0"
+M.VERSION = "0.2.0"
 M.bar = nil
 M.fetchTimer = nil
 M.titleTimer = nil
@@ -18,17 +18,6 @@ local FORMAT_LABELS = {
   verbose = "Verbose",
 }
 local DEFAULT_FORMAT = "compact_reset"
-local NS = "claude_usage."
-
-local function get(k, default)
-  local v = hs.settings.get(NS .. k)
-  if v == nil then return default end
-  return v
-end
-
-local function set(k, v)
-  hs.settings.set(NS .. k, v)
-end
 
 -- Numbers are "% used" — higher = worse.
 -- Thresholds drive the color bucket (4 levels). Bar glyphs use a finer 8-level
@@ -104,57 +93,12 @@ local function humanAgo(epoch)
   return h .. "h ago"
 end
 
-local WEEKDAYS = { sun=0, mon=1, tue=2, wed=3, thu=4, fri=5, sat=6 }
-
--- Parse strings like "1 hr 22 min", "45 min", "2 days 3 hr" into seconds.
-local function parseDuration(s)
-  if not s then return nil end
-  local secs, matched = 0, false
-  for n, unit in s:gmatch("(%d+)%s*(%a+)") do
-    local num, u = tonumber(n), unit:lower()
-    if num then
-      if u:match("^d") then secs = secs + num * 86400; matched = true
-      elseif u:match("^h") then secs = secs + num * 3600; matched = true
-      elseif u:match("^s") then secs = secs + num; matched = true
-      elseif u:match("^m") and not u:match("^mo") then secs = secs + num * 60; matched = true
-      end
-    end
-  end
-  return matched and secs or nil
-end
-
--- Parse strings like "Sat 6:00 PM", "Mon 9:00 AM" into the next matching epoch.
-local function parseWeekdayClock(s)
-  if not s then return nil end
-  local wd, h, m, ampm = s:match("^(%a+)%s+(%d+):(%d+)%s*(%a*)")
-  if not wd then return nil end
-  local target = WEEKDAYS[wd:sub(1, 3):lower()]
-  if not target then return nil end
-  h = tonumber(h); m = tonumber(m)
-  if not h or not m then return nil end
-  if ampm:upper() == "PM" and h < 12 then h = h + 12
-  elseif ampm:upper() == "AM" and h == 12 then h = 0 end
-  local now = os.time()
-  local nowT = os.date("*t", now)
-  local curWd = nowT.wday - 1  -- os.date: Sun=1..Sat=7 → 0..6
-  local daysDelta = (target - curWd) % 7
-  local cand = os.time({
-    year = nowT.year, month = nowT.month, day = nowT.day + daysDelta,
-    hour = h, min = m, sec = 0,
-  })
-  if cand <= now then cand = cand + 7 * 86400 end
-  return cand
-end
-
-local function toEpoch(human)
-  if not human or human == "" then return nil end
-  local d = parseDuration(human)
-  if d then return os.time() + d end
-  return parseWeekdayClock(human)
-end
-
+-- Time formatters. All three take an epoch (seconds since 1970); resets
+-- come from the API as ISO-8601, converted to epoch in data.lua/makeWindow.
+-- The older string-parsing path (parseDuration / parseWeekdayClock /
+-- resetsHuman) was removed — the API has always returned ISO.
 local function fmtAbs(epoch)
-  -- "Wed Apr 15, 15:59" — weekday + date + 24h clock. Consistent across both windows.
+  -- "Wed Apr 15, 15:59" — weekday + date + 24h clock.
   return os.date("%a %b %d, %H:%M", epoch)
 end
 
@@ -174,15 +118,7 @@ local function fmtRel(epoch)
   return days .. "d " .. h .. "h"
 end
 
-local function fiveHourResetRel(s)
-  local w = s.fiveHour
-  if not w then return nil end
-  local epoch = w.resetsAt or toEpoch(w.resetsHuman)
-  if not epoch then return nil end
-  return fmtRel(epoch)
-end
-
--- Compact "H:MM" countdown for the 5h reset (always under 5 hours).
+-- Compact "H:MM" countdown (for the 5h window, which is always under 5 hours).
 local function fmtClock(epoch)
   if not epoch then return nil end
   local d = epoch - os.time()
@@ -199,7 +135,7 @@ end
 local function fiveHourResetClock(s)
   local w = s.fiveHour
   if not w then return nil end
-  local epoch = w.resetsAt or toEpoch(w.resetsHuman)
+  local epoch = w.resetsAt
   if not epoch then return nil end
   return fmtClock(epoch)
 end
@@ -291,28 +227,21 @@ local function applyTitle()
 end
 
 local function resetStr(win)
-  if not win then return "—" end
-  local human = win.resetsHuman
-  local epoch = win.resetsAt or toEpoch(human)
-  if not epoch then
-    if human and human ~= "" then return human end
-    return "—"
-  end
-  -- Always compute both sides ourselves for consistent formatting across both windows.
-  return fmtRel(epoch) .. " (" .. fmtAbs(epoch) .. ")"
+  if not win or not win.resetsAt then return "—" end
+  return fmtRel(win.resetsAt) .. " (" .. fmtAbs(win.resetsAt) .. ")"
 end
 
--- Every field that fetcher.fetch can populate. Wiped at refresh start so an
--- earlier tick's value (e.g. a stale errorMsg from the React-mount race on
--- cold load) never bleeds into a later successful tick's state.
+-- Every field that data.fetch can populate. Wiped at refresh start so an
+-- earlier tick's value (e.g. a stale errorMsg) never bleeds into a later
+-- successful tick's state.
 local FETCH_KEYS = {
   "fiveHour", "weekly", "weeklySonnet", "weeklyOpus", "weeklyHaiku",
   "spend", "account", "extraUsage", "warnings", "errorMsg",
 }
 
 local function refresh()
-  log.d("refresh (fetcher path)")
-  fetcher.fetch(function(parsed)
+  log.d("refresh")
+  data.fetch(function(parsed)
     for _, k in ipairs(FETCH_KEYS) do state.data[k] = nil end
     for k, v in pairs(parsed) do state.data[k] = v end
     applyTitle()
@@ -328,16 +257,6 @@ local function tupleOrDash(win)
   return (win.percentUsed or "?") .. "% used · resets " .. resetStr(win)
 end
 
-local function buildMinimalMenu()
-  local s = state.data
-  return {
-    { title = "5h: " .. tupleOrDash(s.fiveHour), disabled = true },
-    { title = "1w: " .. tupleOrDash(s.weekly),   disabled = true },
-    { title = "-" },
-    { title = "Refresh now", fn = refresh },
-  }
-end
-
 local USAGE_URL = "https://claude.ai/settings/usage"
 
 local function fmtMoney(amount, currency)
@@ -346,73 +265,53 @@ local function fmtMoney(amount, currency)
   return string.format("%.2f %s", amount, currency)
 end
 
--- Flip Extra usage via a direct PUT to /api/organizations/<uuid>/overage_spend_limit.
---
--- Why not the DOM switch: the SPA's visible pill has React handlers that
--- ignore programmatic events (likely isTrusted=false filtering). Tried
--- input.click(), label.click(), parent.click(), native-setter + dispatched
--- change event — none fired the mutation. The JSON endpoint, on the other
--- hand, accepts PUT with {is_enabled: <bool>} and returns the updated row
--- (status 200). Session cookies auto-attach via credentials: "include".
--- After success we prime the React Query cache with qc.setQueryData so the
--- SPA's own UI reflects the change without waiting on a refetch.
+-- Flip Extra usage via direct PUT /api/organizations/<uuid>/overage_spend_limit.
+-- The DOM switch can't be driven programmatically (React's isTrusted filter),
+-- so we hit the same endpoint the SPA's mutation uses. orgUuid comes from
+-- the last successful fetch (state.data.account.orgUuid).
 local TOGGLE_EXTRA_JS_TEMPLATE = [[
 (function(){
   var TOKEN = "%s";
-  window.__cu = window.__cu || {};
-  window.__cu.lastToggle = {stage:"starting", token: TOKEN};
-
-  try {
-    var qc = window.__cu.qc;
-    if (!qc) { window.__cu.lastToggle = {stage:"done", token: TOKEN, err: "no_queryClient"}; return; }
-    var q = qc.getQueryCache().getAll().find(function(q){
-      return q.queryKey && q.queryKey[0] === "overage_spend_limit" && q.queryKey.length === 2;
+  var ORG = "%s";
+  var desired = %s;
+  window.__cu_toggle = {stage:"starting", token: TOKEN};
+  fetch("/api/organizations/" + ORG + "/overage_spend_limit", {
+    method: "PUT",
+    headers: {"content-type": "application/json"},
+    credentials: "include",
+    body: JSON.stringify({is_enabled: desired}),
+  }).then(function(r){
+    return r.text().then(function(body){
+      var parsed = null; try { parsed = JSON.parse(body); } catch (e) {}
+      var ok = r.status === 200 && parsed && parsed.is_enabled === desired;
+      window.__cu_toggle = {
+        stage:"done", token: TOKEN,
+        ok: ok, status: r.status, desired: desired,
+        actual: parsed && parsed.is_enabled,
+        bodySnippet: body.slice(0, 200),
+      };
     });
-    if (!q) { window.__cu.lastToggle = {stage:"done", token: TOKEN, err: "no_overage_query"}; return; }
-    var orgUuid = q.queryKey[1];
-    var before = q.state && q.state.data && q.state.data.is_enabled;
-    var desired = %s;  // explicit true/false from Lua
-
-    fetch("/api/organizations/" + orgUuid + "/overage_spend_limit", {
-      method: "PUT",
-      headers: {"content-type": "application/json"},
-      credentials: "include",
-      body: JSON.stringify({is_enabled: desired}),
-    }).then(function(r){
-      return r.text().then(function(body){
-        var parsed = null;
-        try { parsed = JSON.parse(body); } catch (e) {}
-        var ok = r.status === 200 && parsed && parsed.is_enabled === desired;
-        window.__cu.lastToggle = {
-          stage: "done", token: TOKEN,
-          ok: ok, status: r.status,
-          before: before, desired: desired,
-          actual: parsed && parsed.is_enabled,
-          bodySnippet: body.slice(0, 200),
-        };
-        if (ok) {
-          try { qc.setQueryData(q.queryKey, parsed); } catch (e) {}
-        }
-      });
-    }).catch(function(e){
-      window.__cu.lastToggle = {stage:"done", token: TOKEN, err: "fetch_err: " + String(e)};
-    });
-  } catch (e) {
-    window.__cu.lastToggle = {stage:"done", token: TOKEN, err: "throw: " + String(e)};
-  }
+  }).catch(function(e){
+    window.__cu_toggle = {stage:"done", token: TOKEN, err: "fetch_err: " + String(e)};
+  });
 })()
 ]]
-local TOGGLE_READ_JS = "JSON.stringify(window.__cu && window.__cu.lastToggle || {stage:'none'})"
+local TOGGLE_READ_JS = "JSON.stringify(window.__cu_toggle || {stage:'none'})"
 
 local function toggleExtraUsage()
+  local acct = state.data.account
+  local orgUuid = acct and acct.orgUuid
+  if not orgUuid then
+    hs.alert.show("Toggle blocked: no orgUuid yet — refresh first")
+    return
+  end
   local before = state.data.extraUsage and state.data.extraUsage.isEnabled
   local desired = not before
   log.i("toggle extra usage: " .. tostring(before) .. " → " .. tostring(desired))
   local token = string.format("%d_%d", os.time(), math.random(1000000))
-  local js = string.format(TOGGLE_EXTRA_JS_TEMPLATE, token, tostring(desired))
-  scraper.runJS(js, function(_, _) end)
+  local js = string.format(TOGGLE_EXTRA_JS_TEMPLATE, token, orgUuid, tostring(desired))
+  data.runJS(js, function() end)
 
-  -- Poll for the PUT result with a 5 s cap.
   local tries = 0
   local poll
   poll = hs.timer.doEvery(0.2, function()
@@ -425,7 +324,7 @@ local function toggleExtraUsage()
       applyTitle()
       return
     end
-    scraper.runJS(TOGGLE_READ_JS, function(resultStr, _)
+    data.runJS(TOGGLE_READ_JS, function(resultStr)
       if not resultStr then return end
       local ok, info = pcall(hs.json.decode, resultStr)
       if not ok or type(info) ~= "table" then return end
@@ -442,18 +341,29 @@ local function toggleExtraUsage()
         applyTitle()
         return
       end
-      -- Optimistic update so the menu reflects the change before the next tick.
       if state.data.extraUsage then state.data.extraUsage.isEnabled = desired end
       applyTitle()
-      -- Refetch so utilization / used_credits reflect the new shape too.
       refresh()
     end)
   end)
 end
 
-local function buildFullMenu()
-  local items = {}
+-- One menu builder, two modes. `compact` is the Ctrl/Alt-click variant:
+-- a two-line usage summary + Refresh. Anything else falls through to the
+-- full menu with windows, extras, health, account actions, and submenus.
+local function buildMenu(compact)
   local s = state.data
+
+  if compact then
+    return {
+      { title = "5h: " .. tupleOrDash(s.fiveHour), disabled = true },
+      { title = "1w: " .. tupleOrDash(s.weekly),   disabled = true },
+      { title = "-" },
+      { title = "Refresh now", fn = refresh },
+    }
+  end
+
+  local items = {}
   local loggedIn = s.status == "ok" and s.account and s.account.email ~= nil
 
   -- Usage + extras only render when logged in. Stale data is misleading.
@@ -534,11 +444,11 @@ local function buildFullMenu()
     table.insert(items, { title = "Open claude.ai/settings/usage", fn = function() openUrl(USAGE_URL) end })
     local logoutLabel = "Log out (" .. s.account.email
                      .. (s.account.orgName and (" · " .. s.account.orgName) or "") .. ")"
-    table.insert(items, { title = logoutLabel, fn = function() scraper.logoutSoft(refresh) end })
+    table.insert(items, { title = logoutLabel, fn = function() data.logoutSoft(refresh) end })
   else
     table.insert(items, {
       title = s.status == "needs_login" and "⚠  Log in to claude.ai…" or "Log in to claude.ai…",
-      fn = function() scraper.interactiveLogin(function() refresh() end) end,
+      fn = function() data.interactiveLogin(function() refresh() end) end,
     })
   end
 
@@ -641,10 +551,10 @@ local function buildFullMenu()
     { title = "-" },
     { title = "Force re-fetch now", fn = refresh },
     { title = "Reload page now (hard)", fn = function()
-        scraper.reload(function(_, _) refresh() end)
+        data.reload(function(_, _) refresh() end)
       end },
     { title = "Destroy persistent webview", fn = function()
-        scraper.destroyPersistent()
+        data.destroyPersistent()
         hs.alert.show("persistent webview destroyed")
       end },
     { title = "-" },
@@ -652,9 +562,9 @@ local function buildFullMenu()
         hs.pasteboard.setContents(hs.json.encode(state.data, true))
         hs.alert.show("state JSON copied")
       end },
-    { title = "Copy scraper debug state", fn = function()
-        hs.pasteboard.setContents(hs.json.encode(scraper.debugState(), true))
-        hs.alert.show("scraper debug state copied")
+    { title = "Copy webview debug state", fn = function()
+        hs.pasteboard.setContents(hs.json.encode(data.debugState(), true))
+        hs.alert.show("webview debug state copied")
       end },
     { title = "Copy fetch log (in-memory)", fn = function()
         hs.pasteboard.setContents(table.concat(state.logRing, "\n"))
@@ -665,17 +575,17 @@ local function buildFullMenu()
       end },
     { title = "-" },
     { title = "Hard logout (clear ALL sessions + relaunch)", fn = function()
-        scraper.logoutHard()
+        data.logoutHard()
       end },
     { title = "Clear cookies (relaunch Hammerspoon after)", fn = function()
-        scraper.clearCookies()
+        data.clearCookies()
         hs.alert.show("cookies wiped · relaunch Hammerspoon")
       end },
     { title = "Reload module (hot)", fn = function()
         M.stop()
         for _, mod in ipairs({ "claude_usage", "claude_usage.menubar",
-                               "claude_usage.fetcher", "claude_usage.scraper",
-                               "claude_usage.state", "claude_usage.updater" }) do
+                               "claude_usage.data", "claude_usage.state",
+                               "claude_usage.updater" }) do
           package.loaded[mod] = nil
         end
         require("claude_usage")
@@ -703,9 +613,10 @@ local function buildFullMenu()
   return items
 end
 
-M._debug = { resetStr = function(win) return resetStr(win) end, toEpoch = toEpoch,
-             parseDuration = parseDuration, parseWeekdayClock = parseWeekdayClock,
-             formatTitle = function() return formatTitle() end }
+M._debug = {
+  resetStr    = function(win) return resetStr(win) end,
+  formatTitle = function() return formatTitle() end,
+}
 
 function M.start()
   M.bar = hs.menubar.new()
@@ -716,10 +627,7 @@ function M.start()
 
   -- hs.menubar: if setMenu is a function, it's called each click with keyboard mods.
   M.bar:setMenu(function(mods)
-    if mods and (mods.ctrl or mods.alt) then
-      return buildMinimalMenu()
-    end
-    return buildFullMenu()
+    return buildMenu(mods and (mods.ctrl or mods.alt))
   end)
 
   updater.start()
@@ -741,7 +649,7 @@ function M.stop()
   if M.bar then M.bar:delete(); M.bar = nil end
   updater.stop()
   -- Drop the long-lived webview too, so a module reload starts cold.
-  scraper.destroyPersistent()
+  data.destroyPersistent()
 end
 
 return M
