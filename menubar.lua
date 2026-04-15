@@ -281,7 +281,19 @@ local function buildFullMenu()
       checked = get("keep_webview", false) == true,
       fn = function() set("keep_webview", not (get("keep_webview", false) == true)) end },
     { title = "-" },
-    { title = "Force re-fetch now", fn = refresh },
+    { title = "Force re-fetch now (warm)", fn = refresh },
+    { title = "Reload page now (hard)", fn = function() scraper.forceReload(function(p)
+        for k, v in pairs(p) do state.data[k] = v end
+        if M.bar then M.bar:setTitle(formatTitle()) end
+      end) end },
+    { title = "Destroy persistent webview", fn = function()
+        scraper.destroyPersistent()
+        hs.alert.show("persistent webview destroyed")
+      end },
+    { title = "Copy fetch debug state", fn = function()
+        hs.pasteboard.setContents(hs.json.encode(scraper.debugState(), true))
+        hs.alert.show("fetch debug state copied")
+      end },
     { title = "Copy state JSON", fn = function()
         hs.pasteboard.setContents(hs.json.encode(state.data, true))
         hs.alert.show("state JSON copied")
@@ -374,6 +386,8 @@ function M.stop()
   if M.fetchTimer then M.fetchTimer:stop(); M.fetchTimer = nil end
   if M.titleTimer then M.titleTimer:stop(); M.titleTimer = nil end
   if M.bar then M.bar:delete(); M.bar = nil end
+  -- Drop the long-lived webview too, so a module reload starts cold.
+  scraper.destroyPersistent()
 end
 
 return M

@@ -82,12 +82,24 @@ Built in from day one so iteration is cheap after launch:
 
 ### Fetch flow
 
-1. `hs.webview.new` shown at `(−9000, −9000)` 900×900 borderless so the window is invisible but rendering. (WKWebView pauses JS on truly off-screen views, so it *must* be `show()`n.)
-2. Navigate to `/settings/usage`. Cookies auto-persist via default `WKWebsiteDataStore`.
-3. On `didFinishNavigation`, poll every 500 ms (up to 30 tries ≈ 15 s) via a tiny `READY_JS` snippet waiting for `innerText` to actually contain `\d+%`. SPA lazy-load handled.
-4. Once ready, `EXTRACT_JS` runs — intentionally minimal: returns `{innerText, html, title, href}` and nothing more.
-5. `parser.parse(innerText)` in Lua does all classification. The same function runs against replay files.
-6. Overall 30 s timeout. On failure, last known values stay shown and the title glyph flips to `⚠`.
+One persistent `hs.webview` is created on first fetch and kept alive. Three paths:
+
+| Path | When | Cost |
+|---|---|---|
+| **Cold** | First fetch (no WV yet) | Create WV, `show()` at `(−9000, −9000)` borderless (WKWebView pauses JS on truly off-screen views, so it must be shown), navigate, content-poll (300 ms × 20 max ≈ 6 s cap), extract. ~1.5 s |
+| **Warm** | `pageState == "ready"` and last hard reload < 15 min ago | `evaluateJavaScript(EXTRACT_JS)` on the already-loaded page. No navigation, no network, just one IPC. **~10 ms** |
+| **Stale** | 15 min safety timer elapsed, user forced reload, or warm extract returned empty / `needs_login` | `wv:reload()` on the existing WV (keeps WebContent process + HTTP cache + cookies hot), content-poll, extract. ~1.5 s |
+
+At 60 s cadence that's ~96 hard reloads/day instead of ~1440, and the other ~1344 ticks do a single IPC call each. Roughly **180× less CPU and 96× fewer network requests per day** vs. a naive create-and-destroy-per-fetch design.
+
+Extract details:
+
+- `READY_JS` polls `innerText.length > 400 && /\d+%/.test(innerText)` until the SPA has rendered.
+- `EXTRACT_JS` returns `{innerText, title, href}` on the normal path. Adds the full `html` blob only when **Debug → Save artifacts** is on (saves ~200 KB per IPC roundtrip on the default path).
+- `parser.parse(innerText)` in Lua does all classification. The same function runs against replay files.
+- Overall 30 s timeout. On failure, last known values stay shown and the title glyph flips to `⚠`.
+
+A single `navigationCallback` is attached to the persistent WV once; per-navigation routing uses a `pendingNav` handler that fires then clears itself, so back-to-back reloads never cross-talk.
 
 ### Parser (bulletproof-ish)
 
