@@ -4,6 +4,10 @@ macOS menu bar widget showing Claude's **5-hour** and **weekly** usage limits.
 Scraped from [claude.ai/settings/usage](https://claude.ai/settings/usage), refreshed every 60 s.
 Runs as a [Hammerspoon](https://www.hammerspoon.org/) Lua module.
 
+<p align="center">
+  <img src="docs/menu.png" alt="claude-usage menu bar widget" width="340">
+</p>
+
 ## Install
 
 ```bash
@@ -27,7 +31,7 @@ Hammerspoon auto-launches at login, so the widget does too.
 | **Click** menu bar | Full menu: per-window %, reset times, Extra usage, actions |
 | **Ctrl/Alt-click** | Compact two-line summary |
 | **Refresh now** | Force immediate fetch |
-| **Display format** | Compact / Labeled / Verbose title style |
+| **Display format** | Compact / Compact + 5h reset / Labeled title style |
 | **Enable/Disable extra usage** | Toggle overage spending from the menu |
 
 ## Updates
