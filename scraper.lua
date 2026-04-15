@@ -229,6 +229,7 @@ function M.interactiveLogin(onClosed)
   loginLog("set user-agent ok=%s err=%s", tostring(uaOk), tostring(uaErr))
 
   local done = false
+  local oauthPopup = nil
   local function onLoginSuccess(reason)
     if done then return end
     done = true
@@ -238,24 +239,63 @@ function M.interactiveLogin(onClosed)
       pcall(function() loginWV:delete() end)
       loginWV = nil
     end
+    if oauthPopup then
+      pcall(function() oauthPopup:delete() end)
+      oauthPopup = nil
+    end
     if persistentWV then
       pcall(function() M.reload(function(_, _) end) end)
     end
     if onClosed then onClosed() end
   end
 
-  -- policyCallback fires for every navigation + new-window request. Log every
-  -- invocation so we can see what claude.ai/Google is actually asking for.
-  -- For newWindow we ALLOW the popup to be created — returning false and
-  -- redirecting same-window breaks Google Sign-In v3 because the consent
-  -- page expects window.opener.postMessage(token) via the storagerelay://
-  -- handshake. A real popup (with window.opener set) completes the flow;
-  -- a same-window redirect hangs forever on "One moment please…".
-  loginWV:policyCallback(function(action, _, details, features)
+  -- policyCallback arg #2 on a newWindow action is the CHILD webview
+  -- hs.webview just allocated (HSWebViewWindow backed by a WKWebView sharing
+  -- the parent's configuration → cookies + window.opener are live). We must
+  -- (a) keep a reference, (b) windowStyle it, (c) :show() it. Skipping any
+  -- of those leaves the child invisible/JS-paused, which is what was
+  -- causing Google's consent page to hang on "One moment please…" — the
+  -- popup existed but the GSI SDK inside it couldn't run well enough to
+  -- postMessage the auth code back to the opener (loginWV).
+  loginWV:policyCallback(function(action, newWV, details, features)
     local reqURL = details and details.request and details.request.URL or "?"
     if action == "newWindow" then
-      loginLog("policy newWindow → %s ALLOW (features=%s)",
-        reqURL, hs.inspect(features or {}):gsub("\n", " "))
+      loginLog("policy newWindow → %s ALLOW child=%s features=%s",
+        reqURL, tostring(newWV),
+        hs.inspect(features or {}):gsub("\n", " "))
+      if newWV then
+        oauthPopup = newWV
+        local fx = (features and features.x) or 240
+        local fy = (features and features.y) or 160
+        local fw = (features and features.w) or 500
+        local fh = (features and features.h) or 600
+        pcall(function() newWV:frame({ x = fx, y = fy, w = fw, h = fh }) end)
+        pcall(function()
+          newWV:windowStyle({ "titled", "closable", "resizable", "miniaturizable" })
+        end)
+        pcall(function() newWV:windowTitle("Sign in — OAuth provider") end)
+        pcall(function() newWV:level(hs.drawing.windowLevels.normal) end)
+        pcall(function() newWV:allowTextEntry(true) end)
+        pcall(function()
+          newWV:windowCallback(function(wact)
+            loginLog("popup window %s", tostring(wact))
+            if wact == "closing" then
+              oauthPopup = nil
+              -- Popup closed — let the probe keep running on parent to
+              -- detect whether the code got redeemed before close.
+            end
+          end)
+        end)
+        pcall(function()
+          newWV:navigationCallback(function(nact, nwv, _, nerr)
+            local nu = nwv and nwv:url() or "?"
+            loginLog("popup nav %s url=%s err=%s",
+              tostring(nact), tostring(nu), tostring(nerr))
+          end)
+        end)
+        pcall(function() newWV:show() end)
+        pcall(function() newWV:bringToFront() end)
+      end
       return true
     end
     loginLog("policy %s url=%s", tostring(action), reqURL)
