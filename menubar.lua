@@ -496,10 +496,14 @@ local function buildFullMenu()
     table.insert(items, { title = "-" })
     table.insert(items, { title = "Extra usage", disabled = true })
     if eu.isEnabled then
+      -- System labelColor adapts to light/dark; reads as near-white on the
+      -- dark menu / near-black on light. Overrides the dim look disabled
+      -- rows normally get, so active usage stands out.
+      local usageLine = "    " .. fmtMoney(eu.usedCredits, eu.currency)
+             .. " / " .. fmtMoney(eu.monthlyLimit, eu.currency)
+             .. (eu.utilization and string.format(" (%d%%)", eu.utilization) or "")
       table.insert(items, {
-        title = "    " .. fmtMoney(eu.usedCredits, eu.currency)
-                .. " / " .. fmtMoney(eu.monthlyLimit, eu.currency)
-                .. (eu.utilization and string.format(" (%d%%)", eu.utilization) or ""),
+        title = hs.styledtext.new(usageLine, { color = { list = "System", name = "labelColor" } }),
         disabled = true,
       })
       table.insert(items, {
