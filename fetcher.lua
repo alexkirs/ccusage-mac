@@ -254,7 +254,16 @@ local FETCH_JS_TEMPLATE = [[
 })()
 ]]
 
-local READ_JS = "JSON.stringify(window.__cu && window.__cu.lastFetch || {stage:'none'})"
+-- READ_JS returns both the in-flight fetch state AND the current URL, so the
+-- Lua side can detect mid-fetch navigation to /login (which wipes window.__cu
+-- along with the setTimeout retry chain). Without this, a cold boot after
+-- logout sees claude.ai client-side-redirect to /login while waitAndStart is
+-- still polling on the old document, window.__cu never reaches stage=done,
+-- and we time out at 20 s instead of flipping to needs_login immediately.
+local READ_JS = [[JSON.stringify({
+  fetch: (window.__cu && window.__cu.lastFetch) || null,
+  url: location.href,
+})]]
 
 ---------------------------------------------------------------------
 -- Fetch orchestration
@@ -278,13 +287,42 @@ local function runOnce(onDone)
 
   local pollTimer, timeoutTimer
   local done = false
+  local lastUrl = nil
+
+  local function isLoginUrl(u)
+    return type(u) == "string" and u:match("/(login|auth|sign%-in|signin)") ~= nil
+  end
 
   pollTimer = hs.timer.doEvery(POLL_INTERVAL_S, function()
     if done then if pollTimer then pollTimer:stop(); pollTimer = nil end; return end
     scraper.runJS(READ_JS, function(resultStr, _)
       if done or not resultStr then return end
-      local ok, info = pcall(hs.json.decode, resultStr)
-      if not ok or type(info) ~= "table" then return end
+      local ok, decoded = pcall(hs.json.decode, resultStr)
+      if not ok or type(decoded) ~= "table" then return end
+
+      -- Short-circuit: URL became a login page. Catches server-side redirects
+      -- and client-side pushState that wipe our window.__cu.
+      if isLoginUrl(decoded.url) then
+        done = true
+        if pollTimer then pollTimer:stop(); pollTimer = nil end
+        if timeoutTimer then timeoutTimer:stop(); timeoutTimer = nil end
+        finish({ status = "needs_login" })
+        return
+      end
+
+      -- If navigation replaced the document, window.__cu is gone. Re-inject
+      -- so the next poll can see a fresh run start on the new page.
+      if decoded.fetch == nil then
+        if lastUrl and decoded.url ~= lastUrl then
+          log.i("fetcher: page navigated (" .. tostring(lastUrl) .. " -> " .. tostring(decoded.url) .. "), re-injecting")
+        end
+        lastUrl = decoded.url
+        scraper.runJS(fetchJs, function(_, _) end)
+        return
+      end
+      lastUrl = decoded.url
+
+      local info = decoded.fetch
       if info.stage ~= "done" or info.token ~= token then return end
       done = true
       if pollTimer then pollTimer:stop(); pollTimer = nil end
