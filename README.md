@@ -40,8 +40,8 @@ Built-in. Menu → **Updates**:
 
 - `Check for updates now` — manual check
 - `Check daily` (on by default) — auto-fetch origin/main every 24 h
-- `Auto-apply updates` (off by default) — pull + reload without asking
-- When behind, an `⬆ Update available · Apply & reload` row appears inline
+- `Auto-apply updates` (on by default) — pull + reload silently when a new commit lands
+- Toggle `Auto-apply updates` off if you'd rather review each release; an `⬆ Update available · Apply & reload` row appears inline when behind
 
 No `git pull` needed.
 
@@ -62,7 +62,7 @@ cd ccusage-mac
 ./install.sh   # symlinks into ~/.hammerspoon
 ```
 
-Symlink installs are detected as **dev mode**: auto-update is disabled and a `Dev live-reload` watcher reloads Hammerspoon on any `.lua` save (~300 ms debounce).
+`Live reload on file save` is on by default (~300 ms debounce on any `.lua` change). Toggle it, `Check daily`, and `Auto-apply updates` from the menu's **Updates** submenu. If you're editing code locally and don't want auto-pulls clobbering your work, flip `Auto-apply updates` off — `git pull --ff-only` also refuses unsafe merges on its own.
 
 ## License
 

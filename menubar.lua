@@ -479,7 +479,7 @@ local function buildMenu(compact)
 
   -- Updater section.
   local us = updater.status()
-  if us.behind and us.behind > 0 and not us.dev then
+  if us.behind and us.behind > 0 then
     table.insert(items, {
       title = hs.styledtext.new(
         string.format("⬆ Update available (%d commit%s) · Apply & reload",
@@ -506,7 +506,7 @@ local function buildMenu(compact)
         end)
       end },
   }
-  if us.behind and us.behind > 0 and not us.dev then
+  if us.behind and us.behind > 0 then
     table.insert(upItems, { title = "Apply update & reload",
       disabled = us.updating,
       fn = function() updater.apply() end })
@@ -523,28 +523,21 @@ local function buildMenu(compact)
   table.insert(upItems, {
     title = "Check daily",
     checked = us.autoCheck,
-    disabled = us.dev,
     fn = function() updater.setAutoCheck(not us.autoCheck) end,
   })
   table.insert(upItems, {
     title = "Auto-apply updates",
     checked = us.autoApply,
-    disabled = us.dev,
     fn = function() updater.setAutoApply(not us.autoApply) end,
   })
-  if us.dev then
-    table.insert(upItems, {
-      title = "Dev live-reload (watch .lua)",
-      checked = us.devWatch,
-      fn = function() updater.setDevWatch(not us.devWatch) end,
-    })
-  end
+  table.insert(upItems, {
+    title = "Live reload on file save",
+    checked = us.liveReload,
+    fn = function() updater.setLiveReload(not us.liveReload) end,
+  })
   table.insert(upItems, { title = "-" })
   local last = us.lastCheck and humanAgo(us.lastCheck) or "never"
   table.insert(upItems, { title = "Last check: " .. last, disabled = true })
-  if us.dev then
-    table.insert(upItems, { title = "Install: dev symlink (no remote updates)", disabled = true })
-  end
   if us.dirty then
     table.insert(upItems, { title = "⚠ Working tree dirty — apply blocked", disabled = true })
   end
@@ -616,7 +609,6 @@ local function buildMenu(compact)
   local aboutUs = updater.status()
   local verLine = "About claude-usage v" .. M.VERSION
   if aboutUs.sha then verLine = verLine .. " · " .. aboutUs.sha end
-  if aboutUs.dev then verLine = verLine .. " · dev" end
   table.insert(items, { title = verLine, disabled = true })
   table.insert(items, { title = "    " .. os.getenv("HOME") .. "/.hammerspoon/claude_usage", disabled = true })
   table.insert(items, { title = "Quit", fn = function() M.stop() end })

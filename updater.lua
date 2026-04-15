@@ -1,6 +1,6 @@
--- Self-update via git. Two modes:
---   clone install   → fetch/pull/reload
---   symlink (dev)   → skip updates, enable .lua pathwatcher live-reload
+-- Self-update via git: fetch/pull origin/main on a schedule, reload on apply.
+-- Independent live-reload: pathwatcher reloads Hammerspoon on any .lua save.
+-- Both toggles live on the menu and are on by default.
 
 local state = require("claude_usage.state")
 local log = state.logger("updater")
@@ -17,13 +17,6 @@ local function set(k, v) state.set("update." .. k, v) end
 -- repoPath: resolve symlinks. Used as CWD for all git calls.
 local function repoPath() return hs.fs.pathToAbsolute(HS_DIR) end
 M.repoPath = repoPath
-
--- isDev: true if install is a symlink (developer workflow).
-local function isDev()
-  local attrs = hs.fs.symlinkAttributes(HS_DIR)
-  return attrs and attrs.mode == "link" or false
-end
-M.isDev = isDev
 
 -- Non-blocking git. cb(ok, stdout, stderr, exitCode)
 local function git(args, cb)
@@ -45,11 +38,10 @@ function M.status()
     behind       = get("behind", 0),
     lastCheck    = get("lastCheck", nil),
     checking     = M.checking == true,
-    dev          = isDev(),
     dirty        = M.cachedDirty == true,
     autoCheck    = get("autoCheck", true),
-    autoApply    = get("autoApply", false),
-    devWatch     = get("devWatch", isDev()),
+    autoApply    = get("autoApply", true),
+    liveReload   = get("liveReload", true),
     subjects     = get("subjects", {}),
     error        = M.lastError,
     updating     = M.updating == true,
@@ -101,8 +93,9 @@ function M.checkNow(cb)
         set("subjects", subjects)
         M.checking = false
         state.log("i", string.format("updater: %d commit(s) behind", behind))
-        -- Auto-apply if enabled and safe.
-        if get("autoApply", false) and not isDev() and not M.cachedDirty then
+        -- Auto-apply if enabled and the tree is clean. Dirty trees would
+        -- cause `pull --ff-only` to spam "Update failed"; we skip silently.
+        if get("autoApply", true) and not M.cachedDirty then
           M.apply()
         end
         cb(M.status())
@@ -111,13 +104,10 @@ function M.checkNow(cb)
   end)
 end
 
--- apply: fast-forward pull, then reload. No-op in dev/dirty.
+-- apply: fast-forward pull, then reload. `--ff-only` refuses unsafe merges
+-- (diverged branch, conflicting working-tree edits) and errors cleanly.
 function M.apply(cb)
   cb = cb or function() end
-  if isDev() then
-    hs.alert.show("Dev install — update disabled")
-    return cb(false)
-  end
   if M.updating then return cb(false) end
   M.updating = true
   state.log("i", "updater: pulling origin/main")
@@ -148,8 +138,8 @@ local function refreshLocal()
   end)
 end
 
--- Dev live-reload: watch *.lua under repo, debounced 300 ms. Ignores .git/.
-local function startDevWatch()
+-- Live reload: watch *.lua under the repo, debounced 300 ms. Ignores .git/.
+local function startLiveReload()
   if M.watcher then return end
   local path = repoPath()
   if not path then return end
@@ -158,7 +148,7 @@ local function startDevWatch()
       if f:match("%.lua$") and not f:match("/%.git/") then
         if M.reloadDebounce then M.reloadDebounce:stop() end
         M.reloadDebounce = hs.timer.doAfter(0.3, function()
-          state.log("i", "updater: dev-watch reload")
+          state.log("i", "updater: live-reload")
           hs.reload()
         end)
         return
@@ -166,10 +156,10 @@ local function startDevWatch()
     end
   end)
   M.watcher:start()
-  state.log("i", "updater: dev-watch started on " .. path)
+  state.log("i", "updater: live-reload watching " .. path)
 end
 
-local function stopDevWatch()
+local function stopLiveReload()
   if M.watcher then M.watcher:stop(); M.watcher = nil end
   if M.reloadDebounce then M.reloadDebounce:stop(); M.reloadDebounce = nil end
 end
@@ -181,14 +171,14 @@ end
 
 function M.setAutoApply(v) set("autoApply", v and true or false) end
 
-function M.setDevWatch(v)
-  set("devWatch", v and true or false)
-  if v then startDevWatch() else stopDevWatch() end
+function M.setLiveReload(v)
+  set("liveReload", v and true or false)
+  if v then startLiveReload() else stopLiveReload() end
 end
 
 function M.restartAutoTimer()
   if M.autoTimer then M.autoTimer:stop(); M.autoTimer = nil end
-  if get("autoCheck", true) and not isDev() then
+  if get("autoCheck", true) then
     -- Daily. Kick one check 60 s after start so boot isn't blocked.
     M.autoTimer = hs.timer.doEvery(86400, function() M.checkNow() end)
     hs.timer.doAfter(60, function() M.checkNow() end)
@@ -197,14 +187,14 @@ end
 
 function M.start()
   refreshLocal()
-  if get("devWatch", isDev()) and isDev() then startDevWatch() end
+  if get("liveReload", true) then startLiveReload() end
   M.restartAutoTimer()
-  state.log("i", "updater: start (dev=" .. tostring(isDev()) .. ")")
+  state.log("i", "updater: start")
 end
 
 function M.stop()
   if M.autoTimer then M.autoTimer:stop(); M.autoTimer = nil end
-  stopDevWatch()
+  stopLiveReload()
 end
 
 return M
