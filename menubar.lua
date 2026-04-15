@@ -8,13 +8,14 @@ M.bar = nil
 M.fetchTimer = nil
 M.titleTimer = nil
 
-local FORMATS = { "compact", "compact_reset", "labeled", "verbose" }
+local FORMATS = { "compact_reset", "compact", "labeled", "verbose" }
 local FORMAT_LABELS = {
-  compact = "Compact",
   compact_reset = "Compact + 5h reset",
+  compact = "Compact",
   labeled = "Labeled",
   verbose = "Verbose",
 }
+local DEFAULT_FORMAT = "compact_reset"
 local NS = "claude_usage."
 
 local function get(k, default)
@@ -204,7 +205,7 @@ local function formatTitle()
   local fh = s.fiveHour and s.fiveHour.percentUsed or "?"
   local w = s.weekly and s.weekly.percentUsed or "?"
   local g = glyph()
-  local fmt = get("format", "compact")
+  local fmt = get("format", DEFAULT_FORMAT)
   if fmt == "labeled" then return string.format("%s 5h·%s 1w·%s", g, fh, w) end
   if fmt == "verbose" then return string.format("%s 5h %s%% · 1w %s%% used", g, fh, w) end
   if fmt == "compact_reset" then
@@ -322,7 +323,7 @@ local function buildFullMenu()
   for _, f in ipairs(FORMATS) do
     table.insert(fmtItems, {
       title = FORMAT_LABELS[f] or f,
-      checked = get("format", "compact") == f,
+      checked = get("format", DEFAULT_FORMAT) == f,
       fn = function()
         set("format", f)
         if M.bar then M.bar:setTitle(formatTitle()) end
