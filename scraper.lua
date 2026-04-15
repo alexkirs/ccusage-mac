@@ -276,19 +276,79 @@ function M.interactiveLogin(onClosed)
     if action == "closing" then onLoginSuccess("window closed") end
   end)
 
-  -- Periodic URL tick while the window is alive. Doubles as the canonical
-  -- success-detector because hs.webview's didFinishNavigation doesn't fire
-  -- for every pushState/client-side route (observed: a Google OAuth flow
-  -- landing on claude.ai/new never raised didFinishNavigation, only the
-  -- tick saw the URL change). Anywhere we see an authed claude.ai URL we
-  -- call onLoginSuccess, regardless of which event path reported it.
+  -- Periodic URL tick + side-channel session probe while the window is open.
+  --
+  -- Google's GSI v3 flow (gsiwebsdk=3, redirect_uri=storagerelay://) tends
+  -- to leave the visible page stuck on "One moment please…" inside
+  -- hs.webview: the consent page wants a real popup with window.opener so
+  -- it can postMessage the auth code back, and hs.webview doesn't create
+  -- one. BUT Google's JS often kicks off an XHR to claude.ai that redeems
+  -- the auth code server-side anyway — so the claude.ai session cookie
+  -- gets set even while loginWV stays visibly frozen on Google.
+  --
+  -- Detecting that purely from loginWV's URL doesn't work (still
+  -- accounts.google.com). A fetch() from inside loginWV would be
+  -- cross-origin + CORS-blocked. So: every 5 s we spin up a HIDDEN probe
+  -- webview pointed at a small claude.ai endpoint. Since all hs.webview
+  -- instances share one WKWebsiteDataStore, the probe sees the same
+  -- cookies loginWV picked up. If the response body starts with a JSON
+  -- token ([, {) — we got through to the API, we're logged in.
   local urlTick
   local lastTickURL = nil
+  local tickCount = 0
+  local probing = false
+  local probeWV = nil
+
+  local function runProbe()
+    if probing or done or not loginWV then return end
+    probing = true
+    probeWV = hs.webview.new(
+      { x = -9000, y = -9000, w = 400, h = 400 },
+      { javaScriptEnabled = true }
+    )
+    if not probeWV then probing = false; return end
+    probeWV:windowStyle({ "borderless" })
+    pcall(function() probeWV:setCustomUserAgent(SAFARI_UA) end)
+    local teardown = function()
+      if probeWV then pcall(function() probeWV:delete() end); probeWV = nil end
+      probing = false
+    end
+    probeWV:navigationCallback(function(action, wv)
+      if done then teardown(); return end
+      if action == "didFinishNavigation" then
+        local purl = wv and wv:url() or ""
+        loginLog("probe nav finished url=%s", purl)
+        -- If the probe landed on /login, definitely unauthed.
+        if purl:match("/login") then teardown(); return end
+        wv:evaluateJavaScript(
+          "document.body && document.body.innerText ? document.body.innerText.slice(0,80) : ''",
+          function(body)
+            if done then teardown(); return end
+            local looksJson = type(body) == "string"
+                          and (body:sub(1,1) == "[" or body:sub(1,1) == "{")
+            loginLog("probe body[0..80]=%q json=%s", tostring(body or ""), tostring(looksJson))
+            if looksJson then
+              onLoginSuccess("probe authed via " .. purl)
+              if urlTick then urlTick:stop(); urlTick = nil end
+            end
+            teardown()
+          end)
+      elseif action == "didFailNavigation"
+          or action == "didFailProvisionalNavigation" then
+        teardown()
+      end
+    end)
+    probeWV:url("https://claude.ai/api/organizations")
+    probeWV:show()  -- WKWebView pauses JS in never-shown views; off-screen+shown avoids that
+  end
+
   urlTick = hs.timer.doEvery(1, function()
     if done or not loginWV then
       if urlTick then urlTick:stop(); urlTick = nil end
+      if probeWV then pcall(function() probeWV:delete() end); probeWV = nil end
       return
     end
+    tickCount = tickCount + 1
     local u = loginWV:url() or "?"
     if u ~= lastTickURL then
       loginLog("tick url=%s", u)
@@ -297,6 +357,11 @@ function M.interactiveLogin(onClosed)
     if isAuthedUrl(u) then
       onLoginSuccess("tick authed url: " .. u)
       if urlTick then urlTick:stop(); urlTick = nil end
+      return
+    end
+    -- Probe every 5 s, starting 3 s after open (let the page settle).
+    if tickCount >= 3 and (tickCount % 5) == 0 then
+      runProbe()
     end
   end)
 
