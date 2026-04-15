@@ -454,82 +454,69 @@ end
 local function buildFullMenu()
   local items = {}
   local s = state.data
+  local loggedIn = s.status == "ok" and s.account and s.account.email ~= nil
 
-  -- Top row: login / account status.
-  if s.status == "needs_login" then
-    table.insert(items, {
-      title = "⚠  Log in to claude.ai…",
-      fn = function() scraper.interactiveLogin(function() refresh() end) end,
-    })
-    table.insert(items, { title = "-" })
-  elseif s.status == "ok" and s.account and s.account.email then
-    table.insert(items, { title = "Logged in as " .. s.account.email, disabled = true })
-    if s.account.orgName then
-      table.insert(items, { title = "    " .. s.account.orgName, disabled = true })
-    end
-    table.insert(items, { title = "-" })
-  end
-
-  -- Per-window usage.
-  if s.fiveHour then
-    table.insert(items, { title = "5h window", disabled = true })
-    table.insert(items, { title = "    " .. s.fiveHour.percentUsed .. "% used", disabled = true })
-    table.insert(items, { title = "    resets in " .. resetStr(s.fiveHour), disabled = true })
-  else
-    table.insert(items, { title = "5h window: —", disabled = true })
-  end
-  if s.weekly then
-    table.insert(items, { title = "1w window", disabled = true })
-    table.insert(items, { title = "    " .. s.weekly.percentUsed .. "% used", disabled = true })
-    table.insert(items, { title = "    resets in " .. resetStr(s.weekly), disabled = true })
-  else
-    table.insert(items, { title = "1w window: —", disabled = true })
-  end
-  if s.weeklySonnet then
-    table.insert(items, { title = "1w · Sonnet only", disabled = true })
-    table.insert(items, { title = "    " .. s.weeklySonnet.percentUsed .. "% used", disabled = true })
-    table.insert(items, { title = "    resets in " .. resetStr(s.weeklySonnet), disabled = true })
-  end
-
-  -- Extra usage (overage) block.
-  -- When enabled: render with system labelColor + green "on" so it reads as active.
-  -- When disabled: pass plain strings so NSMenu applies its own dimmed/disabled
-  -- styling, matching the other window rows (explicit gray hex draws solid and
-  -- looks active by comparison).
-  if s.extraUsage then
-    local eu = s.extraUsage
-    table.insert(items, { title = "-" })
-    table.insert(items, { title = "Extra usage", disabled = true })
-    local usageLine = "    " .. fmtMoney(eu.usedCredits, eu.currency)
-           .. " / " .. fmtMoney(eu.monthlyLimit, eu.currency)
-           .. (eu.utilization and string.format(" (%d%%)", eu.utilization) or "")
-    if eu.isEnabled then
-      local labelColor = { list = "System", name = "labelColor" }
-      table.insert(items, {
-        title = hs.styledtext.new(usageLine, { color = labelColor }),
-        disabled = true,
-      })
-      table.insert(items, {
-        title = hs.styledtext.new("    status: ", { color = labelColor })
-             .. hs.styledtext.new("on", { color = { hex = BUCKET_COLOR.safe, alpha = 1 } }),
-        disabled = true,
-      })
+  -- Usage + extras only render when logged in. Stale data is misleading.
+  if loggedIn then
+    if s.fiveHour then
+      table.insert(items, { title = "5h window", disabled = true })
+      table.insert(items, { title = "    " .. s.fiveHour.percentUsed .. "% used", disabled = true })
+      table.insert(items, { title = "    resets in " .. resetStr(s.fiveHour), disabled = true })
     else
-      table.insert(items, { title = usageLine, disabled = true })
-      table.insert(items, { title = "    status: off", disabled = true })
+      table.insert(items, { title = "5h window: —", disabled = true })
     end
-    table.insert(items, {
-      title = eu.isEnabled and "Disable extra usage" or "Enable extra usage",
-      fn = toggleExtraUsage,
-    })
-  end
+    if s.weekly then
+      table.insert(items, { title = "1w window", disabled = true })
+      table.insert(items, { title = "    " .. s.weekly.percentUsed .. "% used", disabled = true })
+      table.insert(items, { title = "    resets in " .. resetStr(s.weekly), disabled = true })
+    else
+      table.insert(items, { title = "1w window: —", disabled = true })
+    end
+    if s.weeklySonnet then
+      table.insert(items, { title = "1w · Sonnet only", disabled = true })
+      table.insert(items, { title = "    " .. s.weeklySonnet.percentUsed .. "% used", disabled = true })
+      table.insert(items, { title = "    resets in " .. resetStr(s.weeklySonnet), disabled = true })
+    end
 
-  -- Warnings (fetcher surfaces actionable strings here).
-  if s.warnings and #s.warnings > 0 then
-    table.insert(items, { title = "-" })
-    table.insert(items, { title = "⚠  Widget needs attention", disabled = true })
-    for _, w in ipairs(s.warnings) do
-      table.insert(items, { title = "      • " .. tostring(w), disabled = true })
+    -- Extra usage (overage) block.
+    -- When enabled: render with system labelColor + green "on" so it reads as active.
+    -- When disabled: pass plain strings so NSMenu applies its own dimmed/disabled
+    -- styling, matching the other window rows (explicit gray hex draws solid and
+    -- looks active by comparison).
+    if s.extraUsage then
+      local eu = s.extraUsage
+      table.insert(items, { title = "-" })
+      table.insert(items, { title = "Extra usage", disabled = true })
+      local usageLine = "    " .. fmtMoney(eu.usedCredits, eu.currency)
+             .. " / " .. fmtMoney(eu.monthlyLimit, eu.currency)
+             .. (eu.utilization and string.format(" (%d%%)", eu.utilization) or "")
+      if eu.isEnabled then
+        local labelColor = { list = "System", name = "labelColor" }
+        table.insert(items, {
+          title = hs.styledtext.new(usageLine, { color = labelColor }),
+          disabled = true,
+        })
+        table.insert(items, {
+          title = hs.styledtext.new("    status: ", { color = labelColor })
+               .. hs.styledtext.new("on", { color = { hex = BUCKET_COLOR.safe, alpha = 1 } }),
+          disabled = true,
+        })
+      else
+        table.insert(items, { title = usageLine, disabled = true })
+        table.insert(items, { title = "    status: off", disabled = true })
+      end
+      table.insert(items, {
+        title = eu.isEnabled and "Disable extra usage" or "Enable extra usage",
+        fn = toggleExtraUsage,
+      })
+    end
+
+    if s.warnings and #s.warnings > 0 then
+      table.insert(items, { title = "-" })
+      table.insert(items, { title = "⚠  Widget needs attention", disabled = true })
+      for _, w in ipairs(s.warnings) do
+        table.insert(items, { title = "      • " .. tostring(w), disabled = true })
+      end
     end
   end
 
@@ -542,8 +529,18 @@ local function buildFullMenu()
   end
 
   table.insert(items, { title = "-" })
-  table.insert(items, { title = "Refresh now", fn = refresh })
-  table.insert(items, { title = "Open claude.ai/settings/usage", fn = function() openUrl(USAGE_URL) end })
+  if loggedIn then
+    table.insert(items, { title = "Refresh now", fn = refresh })
+    table.insert(items, { title = "Open claude.ai/settings/usage", fn = function() openUrl(USAGE_URL) end })
+    local logoutLabel = "Log out (" .. s.account.email
+                     .. (s.account.orgName and (" · " .. s.account.orgName) or "") .. ")"
+    table.insert(items, { title = logoutLabel, fn = function() scraper.logout() end })
+  else
+    table.insert(items, {
+      title = s.status == "needs_login" and "⚠  Log in to claude.ai…" or "Log in to claude.ai…",
+      fn = function() scraper.interactiveLogin(function() refresh() end) end,
+    })
+  end
 
   -- Display format submenu.
   local fmtItems = {}

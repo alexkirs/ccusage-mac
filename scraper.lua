@@ -205,4 +205,17 @@ function M.clearCookies()
   rmTree(HOME .. "/Library/HTTPStorages/org.hammerspoon.Hammerspoon")
 end
 
+-- Log out: destroy webview, wipe cookies, relaunch Hammerspoon so the next
+-- boot has no session and prompts for login. WebKit keeps cookies in process
+-- memory, so a Lua reload alone isn't enough — we must restart the app.
+function M.logout()
+  log.i("logout: destroying webview + wiping cookies + relaunching")
+  state.log("i", "logout requested")
+  M.destroyPersistent()
+  M.clearCookies()
+  hs.alert.show("Logging out — Hammerspoon will relaunch")
+  hs.execute("nohup /bin/bash -c 'sleep 1 && /usr/bin/open -a Hammerspoon' >/dev/null 2>&1 &")
+  hs.timer.doAfter(0.5, function() os.exit(0) end)
+end
+
 return M
