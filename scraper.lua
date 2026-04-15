@@ -243,10 +243,20 @@ function M.interactiveLogin(onClosed)
       pcall(function() oauthPopup:delete() end)
       oauthPopup = nil
     end
-    if persistentWV then
-      pcall(function() M.reload(function(_, _) end) end)
+    -- Destroy the persistent WV rather than reload()ing it. Reason: reload
+    -- re-fetches whatever URL was last loaded, which during logged-out state
+    -- was /login — reloading that URL with fresh cookies claude.ai might
+    -- redirect, but the first fetcher tick arrives in ~100 ms and reads
+    -- /login before the redirect lands, producing a spurious needs_login.
+    -- destroyPersistent() + fresh ensureLoaded() on next fetcher.fetch()
+    -- navigates TARGET_URL (claude.ai/settings/usage) from scratch with
+    -- fresh cookies → authed response → status=ok.
+    M.destroyPersistent()
+    if onClosed then
+      -- Small debounce so the next fetcher tick doesn't race teardown of
+      -- the popup / loginWV on the main run loop.
+      hs.timer.doAfter(0.4, onClosed)
     end
-    if onClosed then onClosed() end
   end
 
   -- policyCallback arg #2 on a newWindow action is the CHILD webview
@@ -264,6 +274,13 @@ function M.interactiveLogin(onClosed)
         reqURL, tostring(newWV),
         hs.inspect(features or {}):gsub("\n", " "))
       if newWV then
+        -- If a previous popup is still around (user retried the OAuth
+        -- button without completing), close it so we don't leak stale
+        -- windows on screen.
+        if oauthPopup then
+          pcall(function() oauthPopup:delete() end)
+          oauthPopup = nil
+        end
         oauthPopup = newWV
         local fx = (features and features.x) or 240
         local fy = (features and features.y) or 160
