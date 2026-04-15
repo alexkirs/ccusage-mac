@@ -502,6 +502,11 @@ function M.interactiveLogin(onClosed)
     if oauthPopup then pcall(function() oauthPopup:delete() end); oauthPopup = nil end
     -- Destroy persistent WV so next fetch navigates cleanly with new cookies.
     M.destroyPersistent()
+    -- The loginWV had focus, which made Hammerspoon the active app.
+    -- Deleting it leaves the app with no visible window, and macOS
+    -- falls back to the Hammerspoon console. Close it preemptively —
+    -- no-op if the user never had it open.
+    pcall(function() hs.closeConsole() end)
     if onClosed then
       hs.timer.doAfter(0.4, onClosed)  -- debounce past loginWV teardown
     end
