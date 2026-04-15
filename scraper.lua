@@ -198,23 +198,44 @@ local function rmTree(path)
   t:start()
 end
 
+-- Remove path if it exists (file OR directory). Synchronous so callers can
+-- sequence a relaunch after deletion actually completes.
+local function rmSync(path)
+  local out, ok, _, rc = hs.execute("/bin/rm -rf " .. string.format("%q", path))
+  log.i(string.format("rm -rf %s rc=%s ok=%s", path, tostring(rc), tostring(ok)))
+  return ok, out
+end
+
+-- Every path WebKit uses for per-app session state. Covers the binarycookies
+-- FILE (not a dir), the WebsiteData store, and the HTTP cache. Missing any
+-- one of these leaves Claude's auth cookie in place and "logout" is a no-op.
+local function webkitPaths()
+  return {
+    HOME .. "/Library/WebKit/org.hammerspoon.Hammerspoon",
+    HOME .. "/Library/HTTPStorages/org.hammerspoon.Hammerspoon",
+    HOME .. "/Library/HTTPStorages/org.hammerspoon.Hammerspoon.binarycookies",
+    HOME .. "/Library/Caches/org.hammerspoon.Hammerspoon",
+  }
+end
+
 function M.clearCookies()
   log.w("clearCookies: wiping Hammerspoon WebKit data (relaunch Hammerspoon after)")
   state.log("w", "cookies cleared (relaunch Hammerspoon)")
-  rmTree(HOME .. "/Library/WebKit/org.hammerspoon.Hammerspoon")
-  rmTree(HOME .. "/Library/HTTPStorages/org.hammerspoon.Hammerspoon")
+  for _, p in ipairs(webkitPaths()) do rmSync(p) end
 end
 
 -- Log out: destroy webview, wipe cookies, relaunch Hammerspoon so the next
 -- boot has no session and prompts for login. WebKit keeps cookies in process
 -- memory, so a Lua reload alone isn't enough — we must restart the app.
+-- Order matters: webview torn down BEFORE rm so no live handle re-writes the
+-- file, rm is synchronous, THEN relaunch + exit.
 function M.logout()
   log.i("logout: destroying webview + wiping cookies + relaunching")
   state.log("i", "logout requested")
   M.destroyPersistent()
-  M.clearCookies()
+  for _, p in ipairs(webkitPaths()) do rmSync(p) end
   hs.alert.show("Logging out — Hammerspoon will relaunch")
-  hs.execute("nohup /bin/bash -c 'sleep 1 && /usr/bin/open -a Hammerspoon' >/dev/null 2>&1 &")
+  hs.execute("nohup /bin/bash -c 'sleep 2 && /usr/bin/open -a Hammerspoon' >/dev/null 2>&1 &")
   hs.timer.doAfter(0.5, function() os.exit(0) end)
 end
 
