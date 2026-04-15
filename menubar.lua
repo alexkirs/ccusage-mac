@@ -162,19 +162,6 @@ local function resetStr(win)
   return fmtRel(epoch) .. " (" .. fmtAbs(epoch) .. ")"
 end
 
-local function displayWarnings(data)
-  local w = {}
-  local function checkWin(label, win)
-    if win and win.resetsHuman and not toEpoch(win.resetsHuman) then
-      table.insert(w, label .. " reset string unparseable: '" .. win.resetsHuman .. "'")
-    end
-  end
-  checkWin("5h", data.fiveHour)
-  checkWin("1w", data.weekly)
-  checkWin("1w Sonnet", data.weeklySonnet)
-  return w
-end
-
 local function refresh()
   if scraper.inFlight() then
     log.d("refresh requested but fetch in flight")
@@ -182,14 +169,13 @@ local function refresh()
   end
   log.d("refresh")
   scraper.fetch(function(parsed)
+    -- Clear per-fetch fields so stale values don't leak across refreshes.
+    state.data.warnings = nil
+    state.data.weeklySonnet = nil
+    state.data.weeklyOpus = nil
+    state.data.weeklyHaiku = nil
+    state.data.spend = nil
     for k, v in pairs(parsed) do state.data[k] = v end
-    if parsed.status == "ok" then
-      local w = parsed.warnings or {}
-      for _, extra in ipairs(displayWarnings(state.data)) do table.insert(w, extra) end
-      state.data.warnings = w
-    else
-      state.data.warnings = nil
-    end
     if M.bar then M.bar:setTitle(formatTitle()) end
   end)
 end
@@ -329,10 +315,11 @@ local function buildFullMenu()
       end },
     { title = "Reload module (hot)", fn = function()
         M.stop()
-        package.loaded["claude_usage"] = nil
-        package.loaded["claude_usage.menubar"] = nil
-        package.loaded["claude_usage.scraper"] = nil
-        package.loaded["claude_usage.state"] = nil
+        for _, mod in ipairs({ "claude_usage", "claude_usage.menubar",
+                               "claude_usage.scraper", "claude_usage.parser",
+                               "claude_usage.state" }) do
+          package.loaded[mod] = nil
+        end
         require("claude_usage")
       end },
     { title = "-" },

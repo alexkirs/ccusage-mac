@@ -75,33 +75,50 @@ Built in from day one so iteration is cheap after launch:
 ~/.hammerspoon/claude_usage/     (symlink → this repo)
   init.lua     entry: requires + starts menubar module
   state.lua    in-memory snapshot, log ring, fetch-timing average
-  scraper.lua  hs.webview fetch, JS DOM extraction, replay mode, artifact capture, login flow, cookie wipe
+  scraper.lua  hs.webview fetch, replay-file loading, login flow, cookie wipe, artifact capture
+  parser.lua   pure-Lua classifier: innerText → usage windows (session / weekly / spend / unknown)
   menubar.lua  hs.menubar wiring, title formatter, full + minimal menus, Debug submenu, timers
 ```
 
 ### Fetch flow
 
-1. `hs.webview.new` (off-screen 1×1, or on-screen if `Debug → Show fetch webview`).
+1. `hs.webview.new` shown at `(−9000, −9000)` 900×900 borderless so the window is invisible but rendering. (WKWebView pauses JS on truly off-screen views, so it *must* be `show()`n.)
 2. Navigate to `/settings/usage`. Cookies auto-persist via default `WKWebsiteDataStore`.
-3. On `didFinishNavigation`, run `EXTRACT_JS`: detect login redirect, read `document.body.innerText`, pull all `\d{1,3}%` matches, grab `document.documentElement.outerHTML` for debugging.
-4. Lua parses JSON result. If 2+ percents → assume `[fiveHour, weekly]`. If on `/login` → `status = "needs_login"`.
-5. Timeout at 25s. On failure, last known values stay shown, title glyph becomes `⚠`.
+3. On `didFinishNavigation`, poll every 500 ms (up to 30 tries ≈ 15 s) via a tiny `READY_JS` snippet waiting for `innerText` to actually contain `\d+%`. SPA lazy-load handled.
+4. Once ready, `EXTRACT_JS` runs — intentionally minimal: returns `{innerText, html, title, href}` and nothing more.
+5. `parser.parse(innerText)` in Lua does all classification. The same function runs against replay files.
+6. Overall 30 s timeout. On failure, last known values stay shown and the title glyph flips to `⚠`.
+
+### Parser (bulletproof-ish)
+
+Anthropic can rename sections, reorder blocks, add new tiers — the parser stops trying to match exact labels:
+
+1. **Tokenize** innerText into trimmed non-empty lines, tagging each with `hasPct`, `hasDollar`, `hasReset`.
+2. **Extract triples**: for every line starting with `Reset…`, find the nearest `N% used` line within a 10-line window (forward, then backward). Attach the nearest short, non-data preceding line as `heading`.
+3. **Classify by shape** of the reset string:
+   - Contains `hr/min/sec/day` or equals `now` → `fiveHour`
+   - `<Weekday> HH:MM [AM|PM]` → `weekly` (or `weeklySonnet` / `weeklyOpus` / `weeklyHaiku` if heading matches a model keyword)
+   - `<Month> DD` or any triple with `$` within 5 lines → `spend` bucket (never mistaken for usage)
+   - Otherwise → `unknown` (warning emitted with heading + values)
+4. **Parse reset shape to `resetsAt` epoch**: duration addition, next-occurrence weekday+time, or next-occurrence month+day.
+5. **Hard errors** if no duration-reset block OR no weekday-reset block found (= Anthropic redesign, alert user).
+6. **Soft warnings** for: any unclassified triple, unparseable reset string, missing landmark (`"Plan usage limits"`, `"Weekly limits"`).
+
+`parser.lua` is pure Lua with no Hammerspoon dependency, so it's trivially testable in isolation (e.g. via `hs -c` against a saved `last.txt`).
 
 ### Replay mode
 
-`Debug → Set replay HTML…` stores a path in `hs.settings`. Next fetch reads that file instead of hitting the network. Good for refining parser against saved snapshots while offline.
+`Debug → Set replay HTML…` points the parser at a saved file. Same `parser.parse` path — no webview, no network. Perfect for iterating on classification rules against real snapshots.
 
 ### Login flow
 
 `scraper.interactiveLogin()` opens a visible 820×900 webview at `/settings/usage`. WebKit handles the login UI; cookies go into the shared data store. A 1 Hz poll detects window close and triggers a background refresh.
 
-## Known gaps / future work
+## Known limitations (OS / library level)
 
-- **DOM selectors are heuristic.** Parser currently takes the first two `\d+%` matches as `[5h, 1w]`. This is fragile. First real run: enable **Save artifacts**, inspect `last.html`, pin stable selectors in `scraper.lua:EXTRACT_JS` and refine `parseUsage()`.
-- **Reset times** are extracted only as raw strings (e.g. "2h 14m"); `resetsAt` unix epoch stays `nil`. Parse once DOM shape is known so the menu can show both "resets in 2h 14m" *and* the absolute clock time.
-- **SPA lazy-load**: if the page paints empty numbers that fill in asynchronously, add a `MutationObserver` or a short retry loop inside `EXTRACT_JS`.
-- **Per-site cookie clearing**: `hs.webview` doesn't expose it; we nuke Hammerspoon's entire WebKit folder and ask the user to relaunch. Acceptable trade-off.
-- **Right-click**: macOS convention is ctrl-click; we map ctrl/alt to the minimal menu since `hs.menubar` doesn't distinguish true right-click cleanly.
+- **Per-site cookie clearing**: `hs.webview` doesn't expose `WKWebsiteDataStore` per-site removal. Cookie wipe nukes Hammerspoon's entire WebKit folder and requires a relaunch.
+- **Right-click**: macOS convention is ctrl-click; we map ctrl/alt-click to the minimal menu since `hs.menubar` doesn't distinguish a true right-click cleanly.
+- **English-only**: reset-string shape detection currently assumes English weekday/month names. Add locale tables to `parser.lua:WEEKDAYS`/`MONTHS` if needed.
 
 ## Uninstall
 

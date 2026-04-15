@@ -1,4 +1,5 @@
 local state = require("claude_usage.state")
+local parser = require("claude_usage.parser")
 local log = hs.logger.new("cu.scraper", hs.settings.get("claude_usage.log_level") or "info")
 
 local M = {}
@@ -39,6 +40,10 @@ local READY_JS = [[
 })()
 ]]
 
+-- The SPA renders async after didFinishNavigation. We need the DOM's computed
+-- innerText, not raw HTML. JS is deliberately tiny here — all classification
+-- happens in parser.lua for easy iteration via hot-reload and shared codepath
+-- with replay mode.
 local EXTRACT_JS = [[
 (function(){
   try {
@@ -46,38 +51,13 @@ local EXTRACT_JS = [[
     if (/\/(login|auth|sign-in)/.test(href)) {
       return JSON.stringify({needsLogin: true, href: href});
     }
-    var body = document.body || {};
-    var txt = body.innerText || "";
-    var lines = txt.split(/\n+/).map(function(s){return s.trim();}).filter(Boolean);
-
-    // Find a named block and return the nearest following "Resets ..." + "N% used" pair.
-    function findBlock(labels, startIdx) {
-      for (var i = startIdx || 0; i < lines.length; i++) {
-        if (labels.indexOf(lines[i]) < 0) continue;
-        var resets = null, used = null;
-        for (var j = i + 1; j < Math.min(i + 12, lines.length); j++) {
-          var l = lines[j];
-          var rm = l.match(/^Resets\s+(?:in\s+)?(.+?)\.?$/i);
-          if (rm && resets === null) resets = rm[1].trim();
-          var um = l.match(/^(\d+)\s*%\s*used/i);
-          if (um && used === null) used = parseInt(um[1], 10);
-          if (resets !== null && used !== null) return { idx: i, resets: resets, used: used };
-        }
-      }
-      return null;
-    }
-
-    var session = findBlock(["Current session"]);
-    // "Weekly limits" has sub-blocks labelled "All models" and "Sonnet only".
-    var weeklyAll = findBlock(["All models"]);
-    var weeklySonnet = findBlock(["Sonnet only"]);
-
+    var body = document.body;
+    if (!body) return JSON.stringify({innerText: "", href: href});
     return JSON.stringify({
-      href: href,
-      raw: txt.slice(0, 8000),
-      html: document.documentElement.outerHTML,
+      innerText: body.innerText || "",
+      html: document.documentElement.outerHTML.slice(0, 200000),
       title: document.title,
-      blocks: { session: session, weeklyAll: weeklyAll, weeklySonnet: weeklySonnet },
+      href: href,
     });
   } catch (e) {
     return JSON.stringify({error: String(e)});
@@ -96,15 +76,16 @@ local function writeFile(path, contents)
   f:close()
 end
 
-local function saveArtifacts(result, ok)
+local function saveArtifacts(raw, parsed, ok)
   if not hs.settings.get("claude_usage.save_artifacts") then return end
   ensureDebugDir()
-  if result.html then writeFile(DEBUG_DIR .. "/last.html", result.html) end
-  if result.raw then writeFile(DEBUG_DIR .. "/last.txt", result.raw) end
-  writeFile(DEBUG_DIR .. "/last-parsed.json", hs.json.encode(result, true))
+  if raw.html then writeFile(DEBUG_DIR .. "/last.html", raw.html) end
+  if raw.innerText then writeFile(DEBUG_DIR .. "/last.txt", raw.innerText) end
+  if parsed then writeFile(DEBUG_DIR .. "/last-parsed.json", hs.json.encode(parsed, true)) end
   if not ok then
     local ts = os.date("%Y%m%d-%H%M%S")
-    writeFile(DEBUG_DIR .. "/fail-" .. ts .. ".json", hs.json.encode(result, true))
+    writeFile(DEBUG_DIR .. "/fail-" .. ts .. ".json",
+              hs.json.encode({ raw = raw, parsed = parsed }, true))
     local files = {}
     for f in hs.fs.dir(DEBUG_DIR) do
       if f:match("^fail%-.*%.json$") then table.insert(files, f) end
@@ -117,93 +98,30 @@ local function saveArtifacts(result, ok)
   end
 end
 
-local function winFromBlock(b)
-  if not b then return nil end
-  local used = tonumber(b.used)
-  if not used then return nil end
-  return {
-    percentUsed = used,
-    percentLeft = math.max(0, 100 - used),
-    resetsHuman = b.resets,
-    resetsAt = nil,
-  }
-end
-
-local function parseUsage(result)
-  if result.needsLogin then
+-- Run the parser over whatever innerText we got (live or replay) and convert
+-- the parser's public shape into the state shape the rest of the app uses.
+local function toUsageState(raw)
+  if raw.needsLogin then
     return { status = "needs_login", errorMsg = nil, warnings = nil }
   end
-  if result.error then
-    return { status = "error", errorMsg = "js: " .. result.error, warnings = nil }
+  if raw.error then
+    return { status = "error", errorMsg = "js: " .. raw.error, warnings = nil }
   end
-  local blocks = result.blocks or {}
-  local five = winFromBlock(blocks.session)
-  local wkAll = winFromBlock(blocks.weeklyAll)
-  local wkSon = winFromBlock(blocks.weeklySonnet)
-  if not five or not wkAll then
-    return {
-      status = "error",
-      errorMsg = "parser drift: missing session or weekly/all blocks — page HTML likely changed",
-      warnings = nil,
-    }
+  local parsed = parser.parse(raw.innerText or "")
+  if parsed.status ~= "ok" then
+    return { status = "error", errorMsg = parsed.errorMsg or "parser failure",
+             warnings = parsed.warnings }
   end
-
-  -- Landmark sanity checks: the page changed if these strings go away.
-  local txt = result.raw or ""
-  local warnings = {}
-  if not txt:find("Plan usage limits", 1, true) then
-    table.insert(warnings, "landmark 'Plan usage limits' not found")
-  end
-  if not txt:find("Weekly limits", 1, true) then
-    table.insert(warnings, "landmark 'Weekly limits' not found")
-  end
-  if not wkSon then
-    table.insert(warnings, "Sonnet-only block not found (label renamed or removed)")
-  end
-
   return {
     status = "ok",
     errorMsg = nil,
-    fiveHour = five,
-    weekly = wkAll,
-    weeklySonnet = wkSon,
-    warnings = warnings,
-  }
-end
-
-local function parseLabelBlocksLua(txt)
-  local lines = {}
-  for line in txt:gmatch("[^\n]+") do
-    line = line:gsub("^%s+", ""):gsub("%s+$", "")
-    if line ~= "" then table.insert(lines, line) end
-  end
-  local function findBlock(labels)
-    for i = 1, #lines do
-      local match = false
-      for _, lab in ipairs(labels) do if lines[i] == lab then match = true; break end end
-      if match then
-        local resets, used = nil, nil
-        for j = i + 1, math.min(i + 12, #lines) do
-          local l = lines[j]
-          if not resets then
-            local r = l:match("^[Rr]esets%s+[Ii]n%s+(.-)%.?$")
-                   or l:match("^[Rr]esets%s+(.-)%.?$")
-            if r and r ~= "" then resets = r end
-          end
-          if not used then
-            local u = l:match("^(%d+)%s*%%%s*used")
-            if u then used = tonumber(u) end
-          end
-          if resets and used then return { idx = i, resets = resets, used = used } end
-        end
-      end
-    end
-    return nil
-  end
-  return {
-    session = findBlock({ "Current session" }),
-    weeklyAll = findBlock({ "All models" }),
-    weeklySonnet = findBlock({ "Sonnet only" }),
+    fiveHour = parsed.fiveHour,
+    weekly = parsed.weekly,
+    weeklySonnet = parsed.weeklySonnet,
+    weeklyOpus = parsed.weeklyOpus,
+    weeklyHaiku = parsed.weeklyHaiku,
+    spend = parsed.spend,
+    warnings = parsed.warnings,
   }
 end
 
@@ -217,25 +135,12 @@ local function loadReplay()
   end
   local content = f:read("*a") or ""
   f:close()
-  local txt
-  if p:match("%.html?$") then
-    txt = content:gsub("<script.->.-</script>", " ")
-                 :gsub("<style.->.-</style>", " ")
-                 :gsub("<br%s*/?>", "\n")
-                 :gsub("</p>", "\n")
-                 :gsub("</div>", "\n")
-                 :gsub("</li>", "\n")
-                 :gsub("<[^>]*>", " ")
-                 :gsub("&nbsp;", " ")
-  else
-    txt = content
-  end
+  local innerText = p:match("%.html?$") and parser.stripHtml(content) or content
   return {
     href = "replay://" .. p,
-    raw = txt:sub(1, 8000),
+    innerText = innerText,
     html = content,
     title = "replay",
-    blocks = parseLabelBlocksLua(txt),
   }
 end
 
@@ -247,8 +152,8 @@ function M.fetch(onDone)
   local replay = loadReplay()
   if replay then
     log.i("replay mode active")
-    saveArtifacts(replay, true)
-    local parsed = parseUsage(replay)
+    local parsed = toUsageState(replay)
+    saveArtifacts(replay, parsed, parsed.status == "ok")
     parsed.lastFetch = os.time()
     state.recordTiming(math.floor((hs.timer.secondsSinceEpoch() - t0) * 1000))
     onDone(parsed)
@@ -306,20 +211,20 @@ function M.fetch(onDone)
       if jsFailed(resultStr, jsErr) then
         local m = "js error: " .. hs.inspect(jsErr)
         log.e(m); state.log("e", m)
-        saveArtifacts({ error = m }, false)
+        saveArtifacts({ error = m }, nil, false)
         finish({ status = "error", errorMsg = m })
         return
       end
-      local ok, result = pcall(hs.json.decode, resultStr or "{}")
-      if not ok or type(result) ~= "table" then
+      local ok, raw = pcall(hs.json.decode, resultStr or "{}")
+      if not ok or type(raw) ~= "table" then
         local m = "json decode fail: " .. tostring(resultStr):sub(1, 200)
         log.e(m); state.log("e", m)
-        saveArtifacts({ raw = tostring(resultStr) }, false)
+        saveArtifacts({ innerText = tostring(resultStr) }, nil, false)
         finish({ status = "error", errorMsg = m })
         return
       end
-      local parsed = parseUsage(result)
-      saveArtifacts(result, parsed.status == "ok")
+      local parsed = toUsageState(raw)
+      saveArtifacts(raw, parsed, parsed.status == "ok")
       finish(parsed)
     end)
   end
