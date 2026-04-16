@@ -181,9 +181,9 @@ local function formatTitle()
   return compactStyled(fh, w, nil)
 end
 
--- 4px-wide vertical bar that fills bottom-up by percent, drawn via hs.canvas.
+-- 3px-wide vertical bar that fills bottom-up by percent, drawn via hs.canvas.
 -- Cached by (worstPct, hex) so we don't redraw an identical icon every tick.
-local ICON_W, ICON_H = 6, 16
+local ICON_W, ICON_H = 5, 16
 local _iconCache = {}
 local _iconCacheSize = 0
 local function progressBarIcon(pctUsed, hex)
@@ -196,14 +196,14 @@ local function progressBarIcon(pctUsed, hex)
   -- Faint background so the bar's outline is visible at 0% too.
   canvas:appendElements({
     type = "rectangle",
-    frame = { x = 1, y = 0, w = 4, h = ICON_H },
+    frame = { x = 1, y = 0, w = 3, h = ICON_H },
     fillColor = { white = 0.5, alpha = 0.18 },
     strokeWidth = 0,
   })
   if fillH > 0 then
     canvas:appendElements({
       type = "rectangle",
-      frame = { x = 1, y = ICON_H - fillH, w = 4, h = fillH },
+      frame = { x = 1, y = ICON_H - fillH, w = 3, h = fillH },
       fillColor = { hex = hex, alpha = 1 },
       strokeWidth = 0,
     })
