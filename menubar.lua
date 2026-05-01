@@ -131,38 +131,115 @@ local function labeledStyled(fh, w)
       .. run(tostring(w), colorForUsed(w))
 end
 
--- 3px-wide vertical bar that fills bottom-up by percent, drawn via hs.canvas.
--- Cached by (worstPct, hex) so we don't redraw an identical icon every tick.
--- Cache is shared across all provider instances: same bucket colors.
-local ICON_W, ICON_H = 5, 16
+-- Composite menubar icon: provider brand glyph (left) + 3px usage bar (right).
+-- The brand half is drawn in a single color that adapts to system light/dark
+-- theme; the bar keeps its bucket color (red/yellow/green) since the color
+-- carries information. Cached by (provider, fillH, hex, theme) so we don't
+-- redraw an identical icon every tick.
+local ICON_H = 16
+local BRAND_W = 7   -- left half of a conceptual 14px-wide brand mark
+local GAP_W   = 1
+local BAR_W   = 5
+local TOTAL_W = BRAND_W + GAP_W + BAR_W
+
+-- Returns true on dark mode. Re-checked on every render so theme toggles
+-- show within one titleTimer tick (60s) without explicit appearance hooks.
+local function isDarkMode()
+  return hs.host.interfaceStyle and hs.host.interfaceStyle() == "Dark"
+end
+
+-- Anthropic-style asterisk burst, drawn as a left-half fan: 12 rays at 30°
+-- steps centered at the right edge of the brand area, with right-pointing
+-- rays skipped so the visible result is only the left semicircle (rays going
+-- up, down, and leftward). hs.canvas does not clip line elements that exit
+-- the frame, so right-going rays would otherwise bleed into the bar area.
+local function drawClaudeBrand(canvas, color)
+  local cx, cy = BRAND_W, ICON_H / 2
+  local outer, inner = 6.5, 1.2
+  for i = 0, 11 do
+    local a = (i / 12) * 2 * math.pi
+    local cosA, sinA = math.cos(a), math.sin(a)
+    if cosA <= 0.001 then
+      canvas:appendElements({
+        type = "segments",
+        coordinates = {
+          { x = cx + cosA * inner, y = cy + sinA * inner },
+          { x = cx + cosA * outer, y = cy + sinA * outer },
+        },
+        strokeColor = { hex = color, alpha = 1 },
+        strokeWidth = 1.0,
+        strokeCapStyle = "round",
+        action = "stroke",
+      })
+    end
+  end
+end
+
+-- Codex-style `>` chevron. References the `>_` mark on Codex's app icon
+-- without the underscore (no horizontal room for both at 7px wide).
+local function drawCodexBrand(canvas, color)
+  canvas:appendElements({
+    type = "segments",
+    coordinates = {
+      { x = 1,            y = 4 },
+      { x = BRAND_W - 1,  y = ICON_H / 2 },
+      { x = 1,            y = ICON_H - 4 },
+    },
+    strokeColor = { hex = color, alpha = 1 },
+    strokeWidth = 1.6,
+    strokeCapStyle = "round",
+    strokeJoinStyle = "round",
+    action = "stroke",
+  })
+end
+
+local BRAND_RENDERERS = {
+  claude = drawClaudeBrand,
+  codex  = drawCodexBrand,
+}
+
 local _iconCache = {}
 local _iconCacheSize = 0
-local function progressBarIcon(pctUsed, hex)
+
+local function compositeIcon(pctUsed, hex, providerId)
   if type(pctUsed) ~= "number" then return nil end
   local pct = math.max(0, math.min(100, pctUsed))
   local fillH = math.floor(pct * ICON_H / 100 + 0.5)
-  local cacheKey = fillH .. ":" .. hex
+  local dark = isDarkMode()
+  local cacheKey = (providerId or "?") .. ":" .. fillH .. ":" .. hex .. ":" .. (dark and "d" or "l")
   if _iconCache[cacheKey] then return _iconCache[cacheKey] end
-  local canvas = hs.canvas.new({ x = 0, y = 0, w = ICON_W, h = ICON_H })
+
+  local canvas = hs.canvas.new({ x = 0, y = 0, w = TOTAL_W, h = ICON_H })
+
+  -- Brand glyph on the left. Color picked from current appearance.
+  local brandCol = dark and "#FFFFFF" or "#000000"
+  local renderer = BRAND_RENDERERS[providerId]
+  if renderer then renderer(canvas, brandCol) end
+
+  -- Bar on the right, same 3px-fill-in-5px-slot as before.
+  local barX = BRAND_W + GAP_W
   canvas:appendElements({
     type = "rectangle",
-    frame = { x = 1, y = 0, w = 3, h = ICON_H },
+    frame = { x = barX + 1, y = 0, w = 3, h = ICON_H },
     fillColor = { white = 0.5, alpha = 0.18 },
     strokeWidth = 0,
   })
   if fillH > 0 then
     canvas:appendElements({
       type = "rectangle",
-      frame = { x = 1, y = ICON_H - fillH, w = 3, h = fillH },
+      frame = { x = barX + 1, y = ICON_H - fillH, w = 3, h = fillH },
       fillColor = { hex = hex, alpha = 1 },
       strokeWidth = 0,
     })
   end
+
   local img = canvas:imageFromCanvas()
   canvas:delete()
   _iconCache[cacheKey] = img
   _iconCacheSize = _iconCacheSize + 1
-  if _iconCacheSize > 64 then
+  -- Possible keys: providers (2) × fillH (17) × buckets (4) × themes (2) = 272.
+  -- Wipe well above that to catch any drift but stay bounded.
+  if _iconCacheSize > 300 then
     _iconCache = {}; _iconCacheSize = 0
   end
   return img
@@ -243,7 +320,7 @@ function M.start(opts)
     local s = getState()
     if s.status ~= "ok" or not s.fiveHour then return nil end
     local pct = s.fiveHour.percentUsed or 0
-    return progressBarIcon(pct, colorForUsed(pct))
+    return compositeIcon(pct, colorForUsed(pct), pid)
   end
 
   local function applyTitle()
