@@ -763,4 +763,127 @@ end
 -- Alias kept for backward compat with any external caller.
 M.logout = M.logoutSoft
 
+---------------------------------------------------------------------
+-- Provider interface (consumed by menubar.lua)
+---------------------------------------------------------------------
+
+-- Fields wiped before each fetch so a stale value (e.g. earlier errorMsg)
+-- from a prior tick never bleeds into a later successful tick.
+local FETCH_KEYS = {
+  "fiveHour", "weekly", "weeklySonnet", "weeklyOpus", "weeklyHaiku",
+  "spend", "account", "extraUsage", "warnings", "errorMsg",
+}
+
+function M.providerFetch(cb)
+  M.fetch(function(parsed)
+    for _, k in ipairs(FETCH_KEYS) do state.data[k] = nil end
+    for k, v in pairs(parsed) do state.data[k] = v end
+    if cb then cb() end
+  end)
+end
+
+-- Flip Extra usage via direct PUT /api/organizations/<uuid>/overage_spend_limit.
+-- Moved from menubar.lua so the provider owns its Claude-specific mutations.
+-- onSuccess fires after the PUT lands so the menubar can refresh + re-render.
+local TOGGLE_EXTRA_JS_TEMPLATE = [[
+(function(){
+  var TOKEN = "%s";
+  var ORG = "%s";
+  var desired = %s;
+  window.__cu_toggle = {stage:"starting", token: TOKEN};
+  fetch("/api/organizations/" + ORG + "/overage_spend_limit", {
+    method: "PUT",
+    headers: {"content-type": "application/json"},
+    credentials: "include",
+    body: JSON.stringify({is_enabled: desired}),
+  }).then(function(r){
+    return r.text().then(function(body){
+      var parsed = null; try { parsed = JSON.parse(body); } catch (e) {}
+      var ok = r.status === 200 && parsed && parsed.is_enabled === desired;
+      window.__cu_toggle = {
+        stage:"done", token: TOKEN,
+        ok: ok, status: r.status, desired: desired,
+        actual: parsed && parsed.is_enabled,
+        bodySnippet: body.slice(0, 200),
+      };
+    });
+  }).catch(function(e){
+    window.__cu_toggle = {stage:"done", token: TOKEN, err: "fetch_err: " + String(e)};
+  });
+})()
+]]
+local TOGGLE_READ_JS = "JSON.stringify(window.__cu_toggle || {stage:'none'})"
+
+function M.toggleExtraUsage(onSuccess)
+  local acct = state.data.account
+  local orgUuid = acct and acct.orgUuid
+  if not orgUuid then
+    hs.alert.show("Toggle blocked: no orgUuid yet - refresh first")
+    return
+  end
+  local before = state.data.extraUsage and state.data.extraUsage.isEnabled
+  local desired = not before
+  log.i("toggle extra usage: " .. tostring(before) .. " → " .. tostring(desired))
+  hs.alert.show("Extra usage: updating to " .. (desired and "on" or "off") .. "…", 2)
+  local token = string.format("%d_%d", os.time(), math.random(1000000))
+  local js = string.format(TOGGLE_EXTRA_JS_TEMPLATE, token, orgUuid, tostring(desired))
+  M.runJS(js, function() end)
+
+  local tries = 0
+  local poll
+  poll = hs.timer.doEvery(0.2, function()
+    tries = tries + 1
+    if tries > 75 then
+      poll:stop()
+      log.w("toggle poll timed out; refreshing to confirm actual state")
+      if onSuccess then onSuccess() end
+      return
+    end
+    M.runJS(TOGGLE_READ_JS, function(resultStr)
+      if not resultStr then return end
+      local ok, info = pcall(hs.json.decode, resultStr)
+      if not ok or type(info) ~= "table" then return end
+      if info.stage ~= "done" or info.token ~= token then return end
+      poll:stop()
+      log.i("toggle result: " .. hs.inspect(info))
+      state.log("i", "extra_usage PUT → " .. hs.json.encode(info))
+      if not info.ok then
+        hs.alert.show("Extra usage toggle failed (HTTP " .. tostring(info.status or "?") .. ")")
+        state.data.warnings = state.data.warnings or {}
+        table.insert(state.data.warnings,
+          "Extra usage PUT failed: " .. (info.err or ("status=" .. tostring(info.status)))
+          .. " · desired=" .. tostring(desired) .. " · actual=" .. tostring(info.actual))
+        if onSuccess then onSuccess() end
+        return
+      end
+      if state.data.extraUsage then state.data.extraUsage.isEnabled = desired end
+      hs.alert.show("Extra usage " .. (desired and "on" or "off"))
+      if onSuccess then onSuccess() end
+    end)
+  end)
+end
+
+function M.makeProvider()
+  return {
+    id = "claude",
+    loginLabel = "claude.ai",
+    openSettingsLabel = "claude.ai/settings/usage",
+    openSettingsUrl = "https://claude.ai/settings/usage",
+    hasExtraUsage = true,
+
+    getState = function() return state.data end,
+    fetch    = M.providerFetch,
+    login    = M.interactiveLogin,
+    logout   = M.logoutSoft,
+    logoutHard = M.logoutHard,
+    toggleExtraUsage = M.toggleExtraUsage,
+
+    runJS = M.runJS,
+    reload = M.reload,
+    destroyPersistent = M.destroyPersistent,
+    debugState = M.debugState,
+    clearCookies = M.clearCookies,
+  }
+end
+
 return M

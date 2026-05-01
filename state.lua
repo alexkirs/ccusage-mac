@@ -16,6 +16,21 @@ M.data = {
   fetchTiming = { totalMs = 0 },
 }
 
+-- Parallel state for the Codex provider. Same shape as M.data; populated by
+-- codex_data.lua. additional[] is a list of { label, fiveHour, weekly } for
+-- per-model rate limits the API returns alongside the primary windows.
+M.codexData = {
+  fiveHour = nil,
+  weekly = nil,
+  additional = nil,  -- list of { label, fiveHour, weekly }
+  account = nil,     -- { email, orgName }
+  warnings = nil,
+  lastFetch = nil,
+  status = "init",
+  errorMsg = nil,
+  fetchTiming = { totalMs = 0 },
+}
+
 M.logRing = {}
 M.fetchTimings = {}
 
