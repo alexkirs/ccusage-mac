@@ -102,7 +102,7 @@ local function fmtClock(epoch)
 end
 
 local function fiveHourResetClock(s)
-  local w = s.fiveHour
+  local w = s.fiveHour or s.weekly
   if not w then return nil end
   local epoch = w.resetsAt
   if not epoch then return nil end
@@ -215,13 +215,17 @@ end
 -- Builds a full menubar block image: brand glyph + bar + stacked text rows.
 -- showReset toggles the second (reset clock) row. Returns an hs.image.
 local function buildBlockIcon(providerId, w5h, w1w, showReset)
-  local fh = w5h and w5h.percentUsed or "?"
+  -- Weekly-only providers (Codex since 2026-07 has no 5h window): render a
+  -- single number driven by the weekly window instead of "?·N".
+  local single = not w5h and w1w
+  local fh = single and w1w.percentUsed or (w5h and w5h.percentUsed or "?")
   local w  = w1w and w1w.percentUsed or "?"
-  local row1str = tostring(fh) .. "·" .. tostring(w)
-  local row1 = pctRow(fh, w)
+  local row1str = single and tostring(fh) or (tostring(fh) .. "·" .. tostring(w))
+  local row1 = single and seg(tostring(fh), colorForUsed(fh)) or pctRow(fh, w)
+  local resetWin = w5h or w1w
   local row2, row2str
   if showReset then
-    row2str = (w5h and w5h.resetsAt and fmtClock(w5h.resetsAt)) or "—"
+    row2str = (resetWin and resetWin.resetsAt and fmtClock(resetWin.resetsAt)) or "—"
     row2 = seg(row2str, NEUTRAL_COLOR)
   end
 
@@ -349,10 +353,22 @@ function M.start(opts)
     local s = getState()
     if s.status == "needs_login" then return "⚠ login" end
     if s.status == "init" then return "… loading" end
-    if s.status == "error" and not s.fiveHour then return "⚠ err" end
+    if s.status == "error" and not (s.fiveHour or s.weekly) then return "⚠ err" end
+    local fmt = get("format", DEFAULT_FORMAT)
+    -- Weekly-only provider: single number instead of "?·N".
+    if not s.fiveHour and s.weekly then
+      local w = s.weekly.percentUsed
+      local st = run(tostring(w), colorForUsed(w))
+      if fmt == "labeled" then
+        return run("1w", NEUTRAL_COLOR) .. st
+      end
+      if fmt == "compact_reset" then
+        return st .. run(" " .. (fiveHourResetClock(s) or "—"), NEUTRAL_COLOR)
+      end
+      return st
+    end
     local fh = s.fiveHour and s.fiveHour.percentUsed or "?"
     local w = s.weekly and s.weekly.percentUsed or "?"
-    local fmt = get("format", DEFAULT_FORMAT)
     if fmt == "labeled" then return labeledStyled(fh, w) end
     if fmt == "compact_reset" then
       return compactStyled(fh, w, fiveHourResetClock(s) or "—")
@@ -365,12 +381,12 @@ function M.start(opts)
   -- them). All other cases are a single block.
   local function currentBarIcon()
     local s = getState()
-    if s.status ~= "ok" or not s.fiveHour then return nil end
+    if s.status ~= "ok" or not (s.fiveHour or s.weekly) then return nil end
     local showReset = get("format", DEFAULT_FORMAT) == "compact_reset"
     local blocks = { { providerId = pid, w5h = s.fiveHour, w1w = s.weekly, showReset = showReset } }
     if pid == "codex" and get("spark_bar", false) then
       local a = sparkEntry(s)
-      if a and a.fiveHour then
+      if a and (a.fiveHour or a.weekly) then
         blocks[#blocks + 1] = { providerId = "spark", w5h = a.fiveHour, w1w = a.weekly, showReset = showReset }
       end
     end
@@ -649,11 +665,13 @@ function M.start(opts)
     table.insert(items, { title = "Updates", menu = upItems })
 
     -- Debug submenu — provider-aware.
+    -- codex_data.lua reads "codex_dump_fetcher"; data.lua reads "dump_fetcher".
+    local dumpKey = pid == "codex" and "codex_dump_fetcher" or "dump_fetcher"
     local debugItems = {
       { title = "Open Hammerspoon console", fn = function() hs.openConsole() end },
       { title = "Dump fetcher response to debug/last-fetcher.json",
-        checked = get("dump_fetcher", false) == true,
-        fn = function() set("dump_fetcher", not (get("dump_fetcher", false) == true)) end },
+        checked = get(dumpKey, false) == true,
+        fn = function() set(dumpKey, not (get(dumpKey, false) == true)) end },
       { title = "-" },
       { title = "Force re-fetch now", fn = refresh },
       { title = "Reload page now (hard)", fn = function()

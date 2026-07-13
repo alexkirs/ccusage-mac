@@ -5,10 +5,14 @@
 -- Endpoint:
 --   GET /backend-api/wham/usage
 --     → { email, plan_type,
---         rate_limit:{ primary_window:{used_percent,reset_at,..},
---                      secondary_window:{...} },
+--         rate_limit:{ primary_window:{used_percent,limit_window_seconds,reset_at,..},
+--                      secondary_window:{...}|null },
 --         additional_rate_limits:[{ limit_name, rate_limit:{primary,secondary} }],
 --         credits:{...}, spend_control:{...} }
+--
+-- Windows are classified by limit_window_seconds (≤6h → 5h slot, else weekly),
+-- not by primary/secondary position: as of 2026-07 secondary_window is null and
+-- primary_window carries the weekly (604800s) limit — there is no 5h window.
 --
 -- Auth: shares chatgpt.com session cookies in the persistent webview. Same
 -- credentials:'include' fetch pattern as Claude. The API returns "used_percent"
@@ -156,6 +160,28 @@ local function makeWindow(w)
   }
 end
 
+-- Classify by limit_window_seconds: short window (≤6h) → fiveHour, else weekly.
+-- API changed 2026-07: secondary_window may be null and primary_window is weekly.
+local function splitWindows(rl)
+  local fiveHour, weekly
+  for i, raw in ipairs({ rl.primary_window or false, rl.secondary_window or false }) do
+    local win = raw and makeWindow(raw) or nil
+    if win then
+      local secs = raw.limit_window_seconds
+      -- No seconds info: fall back to the old positional meaning (primary=5h).
+      local isShort = secs and secs <= 6 * 3600 or (not secs and i == 1)
+      if isShort and not fiveHour then
+        fiveHour = win
+      elseif not weekly then
+        weekly = win
+      elseif not fiveHour then
+        fiveHour = win
+      end
+    end
+  end
+  return fiveHour, weekly
+end
+
 local function mapResponse(info)
   local u = info.usage
   if type(u) ~= "table" then
@@ -173,13 +199,12 @@ local function mapResponse(info)
       warnings = { "API shape changed - rate_limit field missing on /backend-api/wham/usage" },
     }
   end
-  local fiveHour = makeWindow(rl.primary_window)
-  local weekly   = makeWindow(rl.secondary_window)
-  if not fiveHour or not weekly then
+  local fiveHour, weekly = splitWindows(rl)
+  if not fiveHour and not weekly then
     return {
       status = "error",
-      errorMsg = "codex: missing primary_window/secondary_window",
-      warnings = { "API shape changed - expected primary_window.used_percent and secondary_window.used_percent" },
+      errorMsg = "codex: no usable rate-limit window",
+      warnings = { "API shape changed - expected used_percent in primary_window or secondary_window" },
     }
   end
 
@@ -191,10 +216,11 @@ local function mapResponse(info)
     for _, arl in ipairs(u.additional_rate_limits) do
       local n = arl.rate_limit
       if type(n) == "table" then
+        local afh, awk = splitWindows(n)
         table.insert(additional, {
           label    = arl.limit_name or "additional",
-          fiveHour = makeWindow(n.primary_window),
-          weekly   = makeWindow(n.secondary_window),
+          fiveHour = afh,
+          weekly   = awk,
         })
       end
     end
