@@ -7,7 +7,7 @@ local log = state.logger("menubar")
 local get, set = state.get, state.set
 
 local M = {}
-M.VERSION = "0.3.1"
+M.VERSION = "0.3.2"
 M.PREFIX = PREFIX
 M.PROVIDERS = {
   claude = require(PREFIX .. ".claude"),
@@ -316,6 +316,8 @@ end
 
 function M.save() state.saveAccounts(M.accounts) end
 
+local visibleCount  -- defined below (forward declaration for removeAccount)
+
 local function fmtDays(epoch)
   if not epoch then return nil end
   local d = math.floor((epoch - os.time()) / 86400)
@@ -350,6 +352,9 @@ function M.addAccount(providerId)
 end
 
 function M.removeAccount(id)
+  local target
+  for _, a in ipairs(M.accounts) do if a.id == id then target = a end end
+  if target and not target.hidden and visibleCount() <= 1 then hs.alert.show("Keep at least one item visible"); return end
   local inst = M.instances[id]
   if inst then inst.stop(); M.instances[id] = nil end
   for i, a in ipairs(M.accounts) do
@@ -358,12 +363,86 @@ function M.removeAccount(id)
   M.save()
 end
 
+function visibleCount()
+  local n = 0
+  for _, a in ipairs(M.accounts) do if not a.hidden then n = n + 1 end end
+  return n
+end
+
+-- Hidden accounts keep their session but get no menubar item; useful when
+-- the menu bar overflows. The last visible item can't be hidden.
+function M.setHidden(acct, hidden)
+  if hidden and visibleCount() <= 1 then hs.alert.show("Keep at least one item visible"); return end
+  acct.hidden = hidden or nil
+  M.save()
+  local inst = M.instances[acct.id]
+  if hidden and inst then inst.stop(); M.instances[acct.id] = nil end
+  if not hidden and not inst then M.start(acct) end
+end
+
+local function statusLine(acct)
+  local inst = M.instances[acct.id]
+  local s = inst and inst.s or {}
+  local parts = { acct.hidden and "hidden" or (s.status or "—") }
+  if s.status == "ok" then
+    parts[#parts + 1] = (s.fiveHour and (s.fiveHour.percentUsed .. "% 5h") or nil)
+    parts[#parts + 1] = (s.weekly and (s.weekly.percentUsed .. "% 1w") or nil)
+  elseif not acct.cookie then
+    parts[#parts + 1] = "no session"
+  end
+  if acct.cookieExpires then parts[#parts + 1] = "session " .. fmtDays(acct.cookieExpires) end
+  return table.concat(parts, " · ")
+end
+
+-- One submenu per account, reachable from every item, so accounts whose
+-- icon is hidden or pushed off the menu bar can still be managed.
+function M.accountsMenu()
+  local items = {}
+  for _, p in ipairs(M.PROVIDER_ORDER) do
+    table.insert(items, { title = "Add " .. M.PROVIDERS[p].loginLabel .. " account…", fn = function() M.addAccount(p) end })
+  end
+  table.insert(items, { title = "-" })
+  for _, a in ipairs(M.accounts) do
+    local provider = M.PROVIDERS[a.provider]
+    local inst = M.instances[a.id]
+    local email = inst and inst.s and inst.s.account and inst.s.account.email
+    local sub = {
+      { title = statusLine(a) .. (email and (" · " .. email) or ""), disabled = true },
+      { title = "-" },
+    }
+    if a.cookie then
+      table.insert(sub, { title = "Refresh now", disabled = not inst, fn = function() if inst then inst.refresh() end end })
+      table.insert(sub, { title = "Log out", fn = function()
+        provider.logout(a, function() a.cookie, a.cookieExpires = nil, nil; M.save(); if inst then inst.refresh() end end)
+      end })
+    else
+      table.insert(sub, { title = "Log in to " .. provider.loginLabel .. "…", fn = function()
+        loginInto(a, provider, function() local i = M.instances[a.id]; if i then i.refresh() end end)
+      end })
+    end
+    table.insert(sub, { title = "Rename…", fn = function()
+      local btn, text = hs.dialog.textPrompt("Account label", "Short label shown on the menubar icon (up to 7 chars):", a.label or "", "OK", "Cancel")
+      if btn == "OK" then
+        a.label = text ~= "" and text or nil
+        M.save()
+        local i = M.instances[a.id]; if i then i.applyTitle() end
+      end
+    end })
+    table.insert(sub, { title = "Show in menu bar", checked = not a.hidden, fn = function() M.setHidden(a, not a.hidden) end })
+    table.insert(sub, { title = "-" })
+    table.insert(sub, { title = "Remove account", disabled = #M.accounts <= 1, fn = function() M.removeAccount(a.id) end })
+    table.insert(items, { title = (a.label or provider.label) .. "  ·  " .. provider.loginLabel .. "  ·  " .. statusLine(a), menu = sub })
+  end
+  return items
+end
+
 ---------------------------------------------------------------------
 -- Per-instance machinery
 ---------------------------------------------------------------------
 
 -- acct is a live entry of M.accounts (mutated in place, then M.save()).
 function M.start(acct)
+  if acct.hidden then return nil end
   local provider = assert(M.PROVIDERS[acct.provider], "unknown provider " .. tostring(acct.provider))
   local pid = provider.id
   local instance = { acct = acct, provider = provider, s = { status = "init" } }
@@ -585,33 +664,7 @@ function M.start(acct)
       })
     end
 
-    -- Accounts submenu: add another account of any provider, rename/remove this one.
-    local acctItems = {}
-    for _, p in ipairs(M.PROVIDER_ORDER) do
-      table.insert(acctItems, {
-        title = "Add " .. M.PROVIDERS[p].loginLabel .. " account…",
-        fn = function() M.addAccount(p) end,
-      })
-    end
-    table.insert(acctItems, { title = "-" })
-    table.insert(acctItems, { title = "This item: " .. label() .. " (" .. acct.id .. ")", disabled = true })
-    table.insert(acctItems, {
-      title = "Rename…",
-      fn = function()
-        local btn, text = hs.dialog.textPrompt("Account label", "Short label shown on the menubar icon (up to 7 chars):",
-                                               acct.label or "", "OK", "Cancel")
-        if btn == "OK" then
-          acct.label = text ~= "" and text or nil
-          M.save(); applyTitle()
-        end
-      end,
-    })
-    table.insert(acctItems, {
-      title = "Remove this account",
-      disabled = #M.accounts <= 1,
-      fn = function() M.removeAccount(acct.id) end,
-    })
-    table.insert(items, { title = "Accounts", menu = acctItems })
+    table.insert(items, { title = "Accounts", menu = M.accountsMenu() })
 
     local fmtItems = {}
     for _, f in ipairs(FORMATS) do

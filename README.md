@@ -41,8 +41,8 @@ Hammerspoon auto-launches at login, so the widget does too.
 | **Display format** | Compact / Compact + 5h reset / Labeled title style |
 | **Enable/Disable extra usage** | Toggle overage spending from the menu (Claude) |
 | **Accounts → Add … account…** | Log into another claude.ai / chatgpt.com / grok.com / cursor.com (Grok Bot) account; it gets its own item |
-| **Accounts → Rename…** | Short label drawn on the item (e.g. `work`) |
-| **Accounts → Remove this account** | Drop the item and its stored session |
+| **Accounts → <account> →** | Every account is listed in every item's menu: status, Log in/out, Rename (short label on the icon), Show in menu bar, Remove |
+| **Show in menu bar** (off) | Keeps the session but drops the icon; handy when the menu bar overflows |
 
 ## Updates
 
