@@ -1,13 +1,12 @@
 local PREFIX = ((...) or "claude_usage"):gsub("%.[^.]+$", "")
 local state = require(PREFIX .. ".state")
 local updater = require(PREFIX .. ".updater")
-local session = require(PREFIX .. ".session")
 local login = require(PREFIX .. ".login")
 local log = state.logger("menubar")
 local get, set = state.get, state.set
 
 local M = {}
-M.VERSION = "0.3.3"
+M.VERSION = "0.4.0"
 M.PREFIX = PREFIX
 M.PROVIDERS = {
   claude = require(PREFIX .. ".claude"),
@@ -92,41 +91,8 @@ local function fmtClock(epoch)
   if d <= 0 then return "0:00" end
   local h = math.floor(d / 3600)
   local m = math.floor((d % 3600) / 60)
-  if h >= 24 then
-    local days = math.floor(h / 24); h = h % 24
-    return string.format("%dd%dh", days, h)
-  end
+  if h >= 24 then return string.format("%dd", math.floor(h / 24 + 0.5)) end
   return string.format("%d:%02d", h, m)
-end
-
-local function fiveHourResetClock(s)
-  local w = s.fiveHour or s.weekly
-  if not w then return nil end
-  local epoch = w.resetsAt
-  if not epoch then return nil end
-  return fmtClock(epoch)
-end
-
-local function run(text, hex)
-  return hs.styledtext.new(text, { color = { hex = hex, alpha = 1 } })
-end
-
-local function compactStyled(fh, w, tail)
-  local st = run(tostring(fh), colorForUsed(fh))
-           .. run("·", NEUTRAL_COLOR)
-           .. run(tostring(w), colorForUsed(w))
-  if tail and tail ~= "" then
-    st = st .. run(" " .. tail, NEUTRAL_COLOR)
-  end
-  return st
-end
-
-local function labeledStyled(fh, w)
-  return run("5h", NEUTRAL_COLOR)
-      .. run(tostring(fh), colorForUsed(fh))
-      .. run("·", NEUTRAL_COLOR)
-      .. run("1w", NEUTRAL_COLOR)
-      .. run(tostring(w), colorForUsed(w))
 end
 
 -- Menubar block image: brand glyph (left) + 3px usage bar + two stacked text
@@ -209,9 +175,10 @@ local function pctRow(fh, w)
       .. seg(tostring(w), colorForUsed(w))
 end
 
--- Builds a full menubar block image: brand glyph + bar + stacked text rows.
--- showReset toggles the second (reset clock) row. Returns an hs.image.
-local function buildBlockIcon(label, w5h, w1w, showReset)
+-- Builds one menubar block image from b = { label, w5h, w1w, showReset, text }.
+-- b.text (e.g. "⚠", "…") replaces the numbers when the account has no data.
+local function buildBlockIcon(b)
+  local w5h, w1w = b.w5h, b.w1w
   -- Weekly-only providers (Codex since 2026-07 has no 5h window): render a
   -- single number driven by the weekly window instead of "?·N".
   local single = (not w5h) ~= (not w1w)
@@ -219,9 +186,13 @@ local function buildBlockIcon(label, w5h, w1w, showReset)
   local w  = w1w and w1w.percentUsed or "?"
   local row1str = single and tostring(fh) or (tostring(fh) .. "·" .. tostring(w))
   local row1 = single and seg(tostring(fh), colorForUsed(fh)) or pctRow(fh, w)
+  if b.text then
+    fh, row1str = "?", b.text
+    row1 = seg(b.text, b.text == "…" and NEUTRAL_COLOR or BUCKET_COLOR.danger)
+  end
   local resetWin = w5h or w1w
   local row2, row2str
-  if showReset then
+  if b.showReset and not b.text then
     row2str = (resetWin and resetWin.resetsAt and fmtClock(resetWin.resetsAt)) or "—"
     row2 = seg(row2str, NEUTRAL_COLOR)
   end
@@ -230,12 +201,12 @@ local function buildBlockIcon(label, w5h, w1w, showReset)
   local chars = utf8.len(row1str)
   if row2str then chars = math.max(chars, utf8.len(row2str)) end
   local textX = BRAND_W + GAP_W + BAR_W + 2
-  local textW = math.ceil(chars * CHAR_W) + 2
+  local textW = math.ceil(chars * CHAR_W) + (b.text and 8 or 2)  -- fallback-font glyphs run wider
 
   local canvas = hs.canvas.new({ x = 0, y = 0, w = textX + textW, h = ICON_H })
 
   -- Vertical provider label + bar (bar driven by the 5h percent).
-  drawVerticalLabel(canvas, label)
+  drawVerticalLabel(canvas, b.label)
   local fillH = (type(fh) == "number")
     and math.floor(math.max(0, math.min(100, fh)) * ICON_H / 100 + 0.5) or 0
   drawBar(canvas, BRAND_W + GAP_W, fillH, colorForUsed(fh))
@@ -255,14 +226,14 @@ local function buildBlockIcon(label, w5h, w1w, showReset)
   return img, textX + textW
 end
 
--- Composites several blocks side-by-side into one image, so multiple usage
--- blocks can live in a single menubar item (no system gap between them).
--- blocks = list of { label, w5h, w1w, showReset }. Returns an hs.image.
+-- Composites all blocks side-by-side into one image: one menubar item for
+-- every account, so macOS pads the whole strip once (~17px) instead of per
+-- account. Returns an hs.image.
 local BLOCK_GAP = 7
 local function buildComboIcon(blocks)
   local imgs, widths, total = {}, {}, 0
   for i, b in ipairs(blocks) do
-    local img, wd = buildBlockIcon(b.label, b.w5h, b.w1w, b.showReset)
+    local img, wd = buildBlockIcon(b)
     imgs[i], widths[i] = img, wd
     total = total + wd + (i > 1 and BLOCK_GAP or 0)
   end
@@ -316,7 +287,11 @@ end
 
 function M.save() state.saveAccounts(M.accounts) end
 
-local visibleCount  -- defined below (forward declaration for removeAccount)
+local function visibleCount()
+  local n = 0
+  for _, a in ipairs(M.accounts) do if not a.hidden then n = n + 1 end end
+  return n
+end
 
 local function fmtDays(epoch)
   if not epoch then return nil end
@@ -341,6 +316,10 @@ local function loginInto(acct, provider, onDone)
   end)
 end
 
+local function refreshAcct(acct)
+  local inst = M.instances[acct.id]; if inst then inst.refresh() end
+end
+
 function M.addAccount(providerId)
   local provider = M.PROVIDERS[providerId]
   local acct = { id = providerId .. "-" .. os.time(), provider = providerId }
@@ -358,18 +337,12 @@ function M.logoutAccount(acct)
   provider.logout(acct, function()
     acct.cookie, acct.cookieExpires = nil, nil
     M.save()
-    if #M.accounts > 1 then
-      M.removeAccount(acct.id)
-    else
-      local inst = M.instances[acct.id]; if inst then inst.refresh() end
-    end
+    if #M.accounts > 1 then M.removeAccount(acct.id) else refreshAcct(acct) end
   end)
 end
 
 function M.removeAccount(id)
   if #M.accounts <= 1 then hs.alert.show("Can't remove the only account"); return end
-  local target
-  for _, a in ipairs(M.accounts) do if a.id == id then target = a end end
   local inst = M.instances[id]
   if inst then inst.stop(); M.instances[id] = nil end
   for i, a in ipairs(M.accounts) do
@@ -378,148 +351,375 @@ function M.removeAccount(id)
   -- Never leave the menu bar empty: unhide the first remaining account.
   if visibleCount() == 0 then M.setHidden(M.accounts[1], false) end
   M.save()
+  M.applyAllTitles()
 end
 
-function visibleCount()
-  local n = 0
-  for _, a in ipairs(M.accounts) do if not a.hidden then n = n + 1 end end
-  return n
-end
-
--- Hidden accounts keep their session but get no menubar item; useful when
--- the menu bar overflows. The last visible item can't be hidden.
+-- Hidden accounts keep their session but get no block; useful when the menu
+-- bar overflows. The last visible block can't be hidden.
 function M.setHidden(acct, hidden)
-  if hidden and visibleCount() <= 1 then hs.alert.show("Keep at least one item visible"); return end
+  if hidden and visibleCount() <= 1 then hs.alert.show("Keep at least one block visible"); return end
   acct.hidden = hidden or nil
   M.save()
   local inst = M.instances[acct.id]
   if hidden and inst then inst.stop(); M.instances[acct.id] = nil end
   if not hidden and not inst then M.start(acct) end
+  M.applyAllTitles()
 end
 
-local function statusLine(acct)
+---------------------------------------------------------------------
+-- Menus
+---------------------------------------------------------------------
+
+local function windowBlock(items, title, win)
+  if win then
+    table.insert(items, { title = title, disabled = true })
+    table.insert(items, { title = "    " .. win.percentUsed .. "% used", disabled = true })
+    table.insert(items, { title = "    resets in " .. resetStr(win), disabled = true })
+  else
+    table.insert(items, { title = title .. ": —", disabled = true })
+  end
+end
+
+-- Top-level entry text: "claude  ·  me@x.com" plus a state suffix when not ok.
+local function accountTitle(acct)
+  local provider = M.PROVIDERS[acct.provider]
   local inst = M.instances[acct.id]
   local s = inst and inst.s or {}
-  local parts = { acct.hidden and "hidden" or (s.status or "—") }
-  if s.status == "ok" then
-    parts[#parts + 1] = (s.fiveHour and (s.fiveHour.percentUsed .. "% 5h") or nil)
-    parts[#parts + 1] = (s.weekly and (s.weekly.percentUsed .. "% 1w") or nil)
-  elseif not acct.cookie then
-    parts[#parts + 1] = "no session"
+  local who = s.account and s.account.email or provider.loginLabel
+  local t = (acct.label or provider.label) .. "  ·  " .. who
+  if acct.hidden then t = t .. "  ·  hidden"
+  elseif s.status == "needs_login" then t = t .. "  ·  ⚠ login"
+  elseif s.status == "error" then t = t .. "  ·  ⚠ error"
+  elseif s.status == "init" then t = t .. "  ·  loading…"
   end
-  if acct.cookieExpires then parts[#parts + 1] = "session " .. fmtDays(acct.cookieExpires) end
-  return table.concat(parts, " · ")
+  return t
 end
 
--- One submenu per account, reachable from every item, so accounts whose
--- icon is hidden or pushed off the menu bar can still be managed.
-function M.accountsMenu()
+-- Submenu for one account: usage detail, session actions, block settings.
+local function accountMenu(acct)
+  local provider = M.PROVIDERS[acct.provider]
+  local inst = M.instances[acct.id]
+  local s = inst and inst.s or { status = acct.hidden and "hidden" or "stopped" }
   local items = {}
-  for _, p in ipairs(M.PROVIDER_ORDER) do
-    table.insert(items, { title = "Add " .. M.PROVIDERS[p].loginLabel .. " account…", fn = function() M.addAccount(p) end })
-  end
-  table.insert(items, { title = "-" })
-  for _, a in ipairs(M.accounts) do
-    local provider = M.PROVIDERS[a.provider]
-    local inst = M.instances[a.id]
-    local email = inst and inst.s and inst.s.account and inst.s.account.email
-    local sub = {
-      { title = statusLine(a) .. (email and (" · " .. email) or ""), disabled = true },
-      { title = "-" },
-    }
-    if a.cookie then
-      table.insert(sub, { title = "Refresh now", disabled = not inst, fn = function() if inst then inst.refresh() end end })
-      table.insert(sub, { title = #M.accounts > 1 and "Log out & remove" or "Log out", fn = function() M.logoutAccount(a) end })
-    else
-      table.insert(sub, { title = "Log in to " .. provider.loginLabel .. "…", fn = function()
-        loginInto(a, provider, function() local i = M.instances[a.id]; if i then i.refresh() end end)
-      end })
-    end
-    table.insert(sub, { title = "Rename…", fn = function()
-      local btn, text = hs.dialog.textPrompt("Account label", "Short label shown on the menubar icon (up to 7 chars):", a.label or "", "OK", "Cancel")
-      if btn == "OK" then
-        a.label = text ~= "" and text or nil
-        M.save()
-        local i = M.instances[a.id]; if i then i.applyTitle() end
+  local loggedIn = s.status == "ok" and s.account and s.account.email ~= nil
+  local function refresh() refreshAcct(acct) end
+
+  if loggedIn then
+    windowBlock(items, "5h window", s.fiveHour)
+    windowBlock(items, "1w window", s.weekly)
+    if s.weeklySonnet then windowBlock(items, "1w · Sonnet only", s.weeklySonnet) end
+
+    local hasAdditional = s.additional and #s.additional > 0
+    local showSpark = get("spark_bar", false) == true
+    if hasAdditional and showSpark then
+      for _, a in ipairs(s.additional) do
+        table.insert(items, { title = "-" })
+        table.insert(items, { title = a.label or "additional", disabled = true })
+        windowBlock(items, "5h window", a.fiveHour)
+        windowBlock(items, "1w window", a.weekly)
       end
-    end })
-    table.insert(sub, { title = "Show in menu bar", checked = not a.hidden, fn = function() M.setHidden(a, not a.hidden) end })
-    if not a.cookie then
-      table.insert(sub, { title = "-" })
-      table.insert(sub, { title = "Remove account", disabled = #M.accounts <= 1, fn = function() M.removeAccount(a.id) end })
     end
-    table.insert(items, { title = (a.label or provider.label) .. "  ·  " .. provider.loginLabel .. "  ·  " .. statusLine(a), menu = sub })
+    if hasAdditional then
+      table.insert(items, { title = "-" })
+      table.insert(items, {
+        title = "Show per-model limits",
+        checked = showSpark,
+        fn = function() set("spark_bar", not showSpark); M.applyAllTitles() end,
+      })
+    end
+
+    if provider.hasExtraUsage and s.extraUsage then
+      local eu = s.extraUsage
+      table.insert(items, { title = "-" })
+      table.insert(items, { title = "Extra usage", disabled = true })
+      local usageLine = "    " .. fmtMoney(eu.usedCredits, eu.currency)
+             .. " / " .. fmtMoney(eu.monthlyLimit, eu.currency)
+             .. (eu.utilization and string.format(" (%d%%)", eu.utilization) or "")
+      if eu.isEnabled then
+        local labelColor = { list = "System", name = "labelColor" }
+        table.insert(items, { title = hs.styledtext.new(usageLine, { color = labelColor }), disabled = true })
+        table.insert(items, {
+          title = hs.styledtext.new("    status: ", { color = labelColor })
+               .. hs.styledtext.new("on", { color = { hex = BUCKET_COLOR.safe, alpha = 1 } }),
+          disabled = true,
+        })
+      else
+        table.insert(items, { title = usageLine, disabled = true })
+        table.insert(items, { title = "    status: off", disabled = true })
+      end
+      table.insert(items, {
+        title = eu.isEnabled and "Disable extra usage" or "Enable extra usage",
+        fn = function()
+          hs.alert.show("Extra usage: updating…", 2)
+          provider.toggleExtraUsage(acct, s, function(ok, msg) hs.alert.show(msg); refresh() end)
+        end,
+      })
+    end
+
+    if s.warnings and #s.warnings > 0 then
+      table.insert(items, { title = "-" })
+      table.insert(items, { title = "⚠  Widget needs attention", disabled = true })
+      for _, w in ipairs(s.warnings) do
+        table.insert(items, { title = "      • " .. tostring(w), disabled = true })
+      end
+    end
+    table.insert(items, { title = "-" })
+  end
+
+  local health = string.format("State: %s · %s · avg %dms",
+    s.status or "?", humanAgo(s.lastFetch), state.avgFetchMs())
+  local exp = fmtDays(acct.cookieExpires)
+  if exp then health = health .. " · session " .. exp end
+  table.insert(items, { title = health, disabled = true })
+  if s.errorMsg then
+    table.insert(items, { title = "  " .. tostring(s.errorMsg):sub(1, 120), disabled = true })
+  end
+
+  table.insert(items, { title = "-" })
+  if loggedIn then
+    table.insert(items, { title = "Refresh now", fn = refresh })
+    if provider.openSettingsLabel and provider.openSettingsUrl then
+      table.insert(items, { title = "Open " .. provider.openSettingsLabel, fn = function() openUrl(provider.openSettingsUrl) end })
+    end
+    local logoutLabel = (#M.accounts > 1 and "Log out & remove (" or "Log out (") .. s.account.email
+                     .. (s.account.orgName and (" · " .. s.account.orgName) or "") .. ")"
+    table.insert(items, { title = logoutLabel, fn = function() M.logoutAccount(acct) end })
+  elseif acct.cookie and inst then
+    table.insert(items, { title = "Refresh now", fn = refresh })
+    table.insert(items, { title = #M.accounts > 1 and "Log out & remove" or "Log out", fn = function() M.logoutAccount(acct) end })
+  else
+    table.insert(items, {
+      title = (s.status == "needs_login" and "⚠  " or "") .. "Log in to " .. provider.loginLabel .. "…",
+      fn = function() loginInto(acct, provider, refresh) end,
+    })
+  end
+
+  table.insert(items, { title = "-" })
+  table.insert(items, { title = "Rename…", fn = function()
+    local btn, text = hs.dialog.textPrompt("Account label", "Short label shown on the block (up to 7 chars):", acct.label or "", "OK", "Cancel")
+    if btn == "OK" then
+      acct.label = text ~= "" and text or nil
+      M.save()
+      M.applyAllTitles()
+    end
+  end })
+  table.insert(items, { title = "Show in menu bar", checked = not acct.hidden, fn = function() M.setHidden(acct, not acct.hidden) end })
+  if not acct.cookie then
+    table.insert(items, { title = "Remove account", disabled = #M.accounts <= 1, fn = function() M.removeAccount(acct.id) end })
   end
   return items
 end
 
+local function debugMenu()
+  return {
+    { title = "Open Hammerspoon console", fn = function() hs.openConsole() end },
+    { title = "Dump fetcher response to debug/<account>-last-fetcher.json",
+      checked = get("dump_fetcher", false) == true,
+      fn = function() set("dump_fetcher", not (get("dump_fetcher", false) == true)) end },
+    { title = "-" },
+    { title = "Force re-fetch now (all)", fn = M.refreshAll },
+    { title = "Copy state JSON (all accounts)", fn = function()
+        local all = {}
+        for id, inst in pairs(M.instances) do all[id] = inst.s end
+        hs.pasteboard.setContents(hs.json.encode(all, true))
+        hs.alert.show("state JSON copied")
+      end },
+    { title = "Copy fetch log (in-memory)", fn = function()
+        hs.pasteboard.setContents(table.concat(state.logRing, "\n"))
+        hs.alert.show("log copied (" .. #state.logRing .. " lines)")
+      end },
+    { title = "Open debug dir", fn = function() openUrl("file://" .. DEBUG_DIR) end },
+    { title = "-" },
+    { title = "Wipe login-window browser data (all sites)", fn = function()
+        hs.webview.datastore.default():removeRecordsAfter(0, hs.webview.datastore.websiteDataTypes(), function()
+          hs.alert.show("browser data wiped")
+        end)
+      end },
+    { title = "Reload module (hot)", fn = function()
+        M.stopAll()
+        for _, mod in ipairs({ "", ".menubar", ".session", ".login", ".claude", ".codex", ".grok", ".grokbot", ".state", ".updater" }) do
+          package.loaded[PREFIX .. mod] = nil
+        end
+        require(PREFIX)
+      end },
+    { title = "-" },
+    { title = "Log level: " .. (get("log_level", "info")),
+      fn = function()
+        local cur = get("log_level", "info")
+        local nxt = ({ info = "debug", debug = "verbose", verbose = "warning", warning = "error", error = "info" })[cur] or "info"
+        set("log_level", nxt)
+        hs.alert.show("log level → " .. nxt .. " (reload module to apply)")
+      end },
+  }
+end
+
+local function updatesMenu(us)
+  local upItems = {
+    { title = us.checking and "Checking…" or "Check for updates now",
+      disabled = us.checking,
+      fn = function()
+        updater.forceCheck = true
+        hs.alert.show("Checking for updates…")
+        updater.checkNow(function(st)
+          if st.error then hs.alert.show("Check failed: " .. st.error)
+          elseif (st.behind or 0) == 0 then hs.alert.show("Up to date")
+          else hs.alert.show(string.format("%d update%s available", st.behind, st.behind == 1 and "" or "s")) end
+        end)
+      end },
+  }
+  if us.behind and us.behind > 0 then
+    table.insert(upItems, { title = "Apply update & reload", disabled = us.updating, fn = function() updater.apply() end })
+    if us.subjects and #us.subjects > 0 then
+      table.insert(upItems, { title = "-" })
+      table.insert(upItems, { title = "New commits:", disabled = true })
+      for i, subj in ipairs(us.subjects) do
+        if i > 10 then break end
+        table.insert(upItems, { title = "    • " .. subj:sub(1, 80), disabled = true })
+      end
+    end
+  end
+  table.insert(upItems, { title = "-" })
+  table.insert(upItems, { title = "Check daily", checked = us.autoCheck, fn = function() updater.setAutoCheck(not us.autoCheck) end })
+  table.insert(upItems, { title = "Auto-apply updates", checked = us.autoApply, fn = function() updater.setAutoApply(not us.autoApply) end })
+  table.insert(upItems, { title = "Live reload on file save", checked = us.liveReload, fn = function() updater.setLiveReload(not us.liveReload) end })
+  table.insert(upItems, { title = "-" })
+  table.insert(upItems, { title = "Last check: " .. (us.lastCheck and humanAgo(us.lastCheck) or "never"), disabled = true })
+  if us.dirty then table.insert(upItems, { title = "⚠ Working tree dirty — apply blocked", disabled = true }) end
+  if us.error then table.insert(upItems, { title = "⚠ " .. us.error:sub(1, 100), disabled = true }) end
+  return upItems
+end
+
+-- Main menu: one submenu per account, then the global sections.
+-- compact (ctrl/alt-click): flat usage lines for every account.
+function M.buildMenu(compact)
+  local items = {}
+  if compact then
+    for _, a in ipairs(M.accounts) do
+      local inst = M.instances[a.id]
+      local s = inst and inst.s or {}
+      if #items > 0 then table.insert(items, { title = "-" }) end
+      table.insert(items, { title = accountTitle(a), disabled = true })
+      table.insert(items, { title = "    5h: " .. tupleOrDash(s.fiveHour), disabled = true })
+      table.insert(items, { title = "    1w: " .. tupleOrDash(s.weekly),   disabled = true })
+      if get("spark_bar", false) and s.additional then
+        for _, x in ipairs(s.additional) do
+          table.insert(items, { title = "    " .. (x.label or "additional"), disabled = true })
+          table.insert(items, { title = "        5h: " .. tupleOrDash(x.fiveHour), disabled = true })
+          table.insert(items, { title = "        1w: " .. tupleOrDash(x.weekly),   disabled = true })
+        end
+      end
+    end
+    table.insert(items, { title = "-" })
+    table.insert(items, { title = "Refresh all", fn = M.refreshAll })
+    return items
+  end
+
+  for _, a in ipairs(M.accounts) do
+    table.insert(items, { title = accountTitle(a), menu = accountMenu(a) })
+  end
+  table.insert(items, { title = "-" })
+
+  local addItems = {}
+  for _, p in ipairs(M.PROVIDER_ORDER) do
+    table.insert(addItems, { title = M.PROVIDERS[p].loginLabel .. "…", fn = function() M.addAccount(p) end })
+  end
+  table.insert(items, { title = "Add account", menu = addItems })
+
+  local fmtItems = {}
+  for _, f in ipairs(FORMATS) do
+    table.insert(fmtItems, {
+      title = FORMAT_LABELS[f] or f,
+      checked = get("format", DEFAULT_FORMAT) == f,
+      fn = function() set("format", f); M.applyAllTitles() end,
+    })
+  end
+  table.insert(items, { title = "Display format", menu = fmtItems })
+
+  local us = updater.status()
+  if us.behind and us.behind > 0 then
+    table.insert(items, {
+      title = hs.styledtext.new(
+        string.format("⬆ Update available (%d commit%s) · Apply & reload",
+          us.behind, us.behind == 1 and "" or "s"),
+        { color = { hex = BUCKET_COLOR.safe, alpha = 1 } }),
+      fn = function() updater.apply() end,
+    })
+  end
+  table.insert(items, { title = "Updates", menu = updatesMenu(us) })
+  table.insert(items, { title = "Debug", menu = debugMenu() })
+
+  table.insert(items, { title = "-" })
+  local verLine = "About claude-usage v" .. M.VERSION
+  if us.sha then verLine = verLine .. " · " .. us.sha end
+  table.insert(items, { title = verLine, disabled = true })
+  table.insert(items, { title = "    " .. os.getenv("HOME") .. "/.hammerspoon/claude_usage", disabled = true })
+  table.insert(items, { title = "Quit", fn = function() M.stopAll() end })
+  return items
+end
+
 ---------------------------------------------------------------------
--- Per-instance machinery
+-- The single menubar item + per-account fetch loops
 ---------------------------------------------------------------------
+
+local function ensureBar()
+  if M.bar then return end
+  M.bar = hs.menubar.new()
+  if not M.bar then log.e("hs.menubar.new returned nil"); return end
+  M.bar:setTitle("… loading")
+  M.bar:setMenu(function(mods) return M.buildMenu(mods and (mods.ctrl or mods.alt)) end)
+  M.titleTimer = hs.timer.doEvery(60, M.applyAllTitles)  -- reset clocks tick
+  if not M._updaterStarted then
+    updater.start()
+    M._updaterStarted = true
+  end
+end
+
+-- Redraws the strip: every visible account's blocks, in registry order.
+function M.applyAllTitles()
+  if not M.bar then return end
+  local blocks = {}
+  for _, a in ipairs(M.accounts) do
+    local inst = M.instances[a.id]
+    if inst then for _, b in ipairs(inst.blocks()) do blocks[#blocks + 1] = b end end
+  end
+  if #blocks == 0 then
+    M.bar:setIcon(nil, false); M.bar:setTitle("⚠ login")
+    return
+  end
+  M.bar:setIcon(buildComboIcon(blocks), false)
+  M.bar:setTitle("")
+end
+
+function M.refreshAll()
+  for _, inst in pairs(M.instances) do inst.refresh() end
+end
 
 -- acct is a live entry of M.accounts (mutated in place, then M.save()).
 function M.start(acct)
   if acct.hidden then return nil end
   local provider = assert(M.PROVIDERS[acct.provider], "unknown provider " .. tostring(acct.provider))
-  local pid = provider.id
   local instance = { acct = acct, provider = provider, s = { status = "init" } }
-  local function label() return acct.label or provider.label end
-  local function getState() return instance.s end
 
-  local function formatTitle()
-    local s = getState()
-    if s.status == "needs_login" then return "⚠ login" end
-    if s.status == "init" then return "… loading" end
-    if s.status == "error" and not (s.fiveHour or s.weekly) then return "⚠ err" end
-    local fmt = get("format", DEFAULT_FORMAT)
-    if (not s.fiveHour) ~= (not s.weekly) then
-      local w = (s.fiveHour or s.weekly).percentUsed
-      local st = run(tostring(w), colorForUsed(w))
-      if fmt == "labeled" then return run("1w", NEUTRAL_COLOR) .. st end
-      if fmt == "compact_reset" then
-        return st .. run(" " .. (fiveHourResetClock(s) or "—"), NEUTRAL_COLOR)
-      end
-      return st
+  -- Blocks this account contributes to the strip. Codex with Spark enabled
+  -- adds a second block for the per-model limit.
+  function instance.blocks()
+    local s = instance.s
+    local label = acct.label or provider.label
+    if s.status ~= "ok" or not (s.fiveHour or s.weekly) then
+      return { { label = label, text = s.status == "init" and "…" or "⚠" } }
     end
-    local fh = s.fiveHour and s.fiveHour.percentUsed or "?"
-    local w = s.weekly and s.weekly.percentUsed or "?"
-    if fmt == "labeled" then return labeledStyled(fh, w) end
-    if fmt == "compact_reset" then return compactStyled(fh, w, fiveHourResetClock(s) or "—") end
-    return compactStyled(fh, w, nil)
-  end
-
-  -- Codex with Spark enabled composites the two blocks into one image.
-  local function currentBarIcon()
-    local s = getState()
-    if s.status ~= "ok" or not (s.fiveHour or s.weekly) then return nil end
     local showReset = get("format", DEFAULT_FORMAT) == "compact_reset"
-    local blocks = { { label = label(), w5h = s.fiveHour, w1w = s.weekly, showReset = showReset } }
-    if pid == "codex" and get("spark_bar", false) then
+    local blocks = { { label = label, w5h = s.fiveHour, w1w = s.weekly, showReset = showReset } }
+    if provider.id == "codex" and get("spark_bar", false) then
       local a = sparkEntry(s)
       if a and (a.fiveHour or a.weekly) then
         blocks[#blocks + 1] = { label = "spark", w5h = a.fiveHour, w1w = a.weekly, showReset = showReset }
       end
     end
-    if #blocks == 1 then
-      local b = blocks[1]
-      return (buildBlockIcon(b.label, b.w5h, b.w1w, b.showReset))
-    end
-    return buildComboIcon(blocks)
+    return blocks
   end
 
-  local function applyTitle()
-    if not instance.bar then return end
-    local icon = currentBarIcon()
-    if icon then
-      instance.bar:setIcon(icon, false)
-      instance.bar:setTitle("")
-    else
-      instance.bar:setIcon(nil, false)
-      instance.bar:setTitle(formatTitle())
-    end
-  end
-
-  local function refresh()
+  function instance.refresh()
     log.d(acct.id .. " refresh")
     local t0 = hs.timer.secondsSinceEpoch()
     provider.fetch(acct, function(parsed)
@@ -537,291 +737,28 @@ function M.start(acct)
       end
       instance.s = parsed
       log.i(string.format("%s fetch dt=%dms status=%s", acct.id, dt, parsed.status or "?"))
-      applyTitle()
+      M.applyAllTitles()
     end)
   end
 
-  local function doLogin() loginInto(acct, provider, refresh) end
-
-  local function doLogout() M.logoutAccount(acct) end
-
-  local function toggleExtraUsage()
-    if not provider.toggleExtraUsage then return end
-    hs.alert.show("Extra usage: updating…", 2)
-    provider.toggleExtraUsage(acct, getState(), function(ok, msg)
-      hs.alert.show(msg)
-      refresh()
-    end)
-  end
-
-  local function windowBlock(items, title, win)
-    if win then
-      table.insert(items, { title = title, disabled = true })
-      table.insert(items, { title = "    " .. win.percentUsed .. "% used", disabled = true })
-      table.insert(items, { title = "    resets in " .. resetStr(win), disabled = true })
-    else
-      table.insert(items, { title = title .. ": —", disabled = true })
-    end
-  end
-
-  local function buildMenu(compact)
-    local s = getState()
-
-    if compact then
-      local m = {
-        { title = "5h: " .. tupleOrDash(s.fiveHour), disabled = true },
-        { title = "1w: " .. tupleOrDash(s.weekly),   disabled = true },
-      }
-      if get("spark_bar", false) and s.additional then
-        for _, a in ipairs(s.additional) do
-          table.insert(m, { title = "-" })
-          table.insert(m, { title = a.label or "additional", disabled = true })
-          table.insert(m, { title = "5h: " .. tupleOrDash(a.fiveHour), disabled = true })
-          table.insert(m, { title = "1w: " .. tupleOrDash(a.weekly),   disabled = true })
-        end
-      end
-      table.insert(m, { title = "-" })
-      table.insert(m, { title = "Refresh now", fn = refresh })
-      return m
-    end
-
-    local items = {}
-    local loggedIn = s.status == "ok" and s.account and s.account.email ~= nil
-
-    if loggedIn then
-      windowBlock(items, "5h window", s.fiveHour)
-      windowBlock(items, "1w window", s.weekly)
-      if s.weeklySonnet then windowBlock(items, "1w · Sonnet only", s.weeklySonnet) end
-
-      local hasAdditional = s.additional and #s.additional > 0
-      local showSpark = get("spark_bar", false) == true
-      if hasAdditional and showSpark then
-        for _, a in ipairs(s.additional) do
-          table.insert(items, { title = "-" })
-          table.insert(items, { title = a.label or "additional", disabled = true })
-          windowBlock(items, "5h window", a.fiveHour)
-          windowBlock(items, "1w window", a.weekly)
-        end
-      end
-      if hasAdditional then
-        table.insert(items, { title = "-" })
-        table.insert(items, {
-          title = "Show per-model limits",
-          checked = showSpark,
-          fn = function() set("spark_bar", not showSpark); M.applyAllTitles() end,
-        })
-      end
-
-      if provider.hasExtraUsage and s.extraUsage then
-        local eu = s.extraUsage
-        table.insert(items, { title = "-" })
-        table.insert(items, { title = "Extra usage", disabled = true })
-        local usageLine = "    " .. fmtMoney(eu.usedCredits, eu.currency)
-               .. " / " .. fmtMoney(eu.monthlyLimit, eu.currency)
-               .. (eu.utilization and string.format(" (%d%%)", eu.utilization) or "")
-        if eu.isEnabled then
-          local labelColor = { list = "System", name = "labelColor" }
-          table.insert(items, { title = hs.styledtext.new(usageLine, { color = labelColor }), disabled = true })
-          table.insert(items, {
-            title = hs.styledtext.new("    status: ", { color = labelColor })
-                 .. hs.styledtext.new("on", { color = { hex = BUCKET_COLOR.safe, alpha = 1 } }),
-            disabled = true,
-          })
-        else
-          table.insert(items, { title = usageLine, disabled = true })
-          table.insert(items, { title = "    status: off", disabled = true })
-        end
-        table.insert(items, {
-          title = eu.isEnabled and "Disable extra usage" or "Enable extra usage",
-          fn = toggleExtraUsage,
-        })
-      end
-
-      if s.warnings and #s.warnings > 0 then
-        table.insert(items, { title = "-" })
-        table.insert(items, { title = "⚠  Widget needs attention", disabled = true })
-        for _, w in ipairs(s.warnings) do
-          table.insert(items, { title = "      • " .. tostring(w), disabled = true })
-        end
-      end
-    end
-
-    table.insert(items, { title = "-" })
-    local health = string.format("State: %s · %s · avg %dms",
-      s.status or "?", humanAgo(s.lastFetch), state.avgFetchMs())
-    local exp = fmtDays(acct.cookieExpires)
-    if exp then health = health .. " · session " .. exp end
-    table.insert(items, { title = health, disabled = true })
-    if s.errorMsg then
-      table.insert(items, { title = "  " .. tostring(s.errorMsg):sub(1, 120), disabled = true })
-    end
-
-    table.insert(items, { title = "-" })
-    if loggedIn then
-      table.insert(items, { title = "Refresh now", fn = refresh })
-      if provider.openSettingsLabel and provider.openSettingsUrl then
-        table.insert(items, {
-          title = "Open " .. provider.openSettingsLabel,
-          fn = function() openUrl(provider.openSettingsUrl) end,
-        })
-      end
-      local logoutLabel = (#M.accounts > 1 and "Log out & remove (" or "Log out (") .. s.account.email
-                       .. (s.account.orgName and (" · " .. s.account.orgName) or "") .. ")"
-      table.insert(items, { title = logoutLabel, fn = doLogout })
-    else
-      table.insert(items, {
-        title = (s.status == "needs_login" and "⚠  " or "") .. "Log in to " .. provider.loginLabel .. "…",
-        fn = doLogin,
-      })
-    end
-
-    table.insert(items, { title = "Accounts", menu = M.accountsMenu() })
-
-    local fmtItems = {}
-    for _, f in ipairs(FORMATS) do
-      table.insert(fmtItems, {
-        title = FORMAT_LABELS[f] or f,
-        checked = get("format", DEFAULT_FORMAT) == f,
-        fn = function() set("format", f); M.applyAllTitles() end,
-      })
-    end
-    table.insert(items, { title = "Display format", menu = fmtItems })
-
-    -- Updater section (global, but render in each menu).
-    local us = updater.status()
-    if us.behind and us.behind > 0 then
-      table.insert(items, {
-        title = hs.styledtext.new(
-          string.format("⬆ Update available (%d commit%s) · Apply & reload",
-            us.behind, us.behind == 1 and "" or "s"),
-          { color = { hex = BUCKET_COLOR.safe, alpha = 1 } }),
-        fn = function() updater.apply() end,
-      })
-    end
-    local upItems = {
-      { title = us.checking and "Checking…" or "Check for updates now",
-        disabled = us.checking,
-        fn = function()
-          updater.forceCheck = true
-          hs.alert.show("Checking for updates…")
-          updater.checkNow(function(st)
-            if st.error then hs.alert.show("Check failed: " .. st.error)
-            elseif (st.behind or 0) == 0 then hs.alert.show("Up to date")
-            else hs.alert.show(string.format("%d update%s available", st.behind, st.behind == 1 and "" or "s")) end
-          end)
-        end },
-    }
-    if us.behind and us.behind > 0 then
-      table.insert(upItems, { title = "Apply update & reload", disabled = us.updating, fn = function() updater.apply() end })
-      if us.subjects and #us.subjects > 0 then
-        table.insert(upItems, { title = "-" })
-        table.insert(upItems, { title = "New commits:", disabled = true })
-        for i, subj in ipairs(us.subjects) do
-          if i > 10 then break end
-          table.insert(upItems, { title = "    • " .. subj:sub(1, 80), disabled = true })
-        end
-      end
-    end
-    table.insert(upItems, { title = "-" })
-    table.insert(upItems, { title = "Check daily", checked = us.autoCheck, fn = function() updater.setAutoCheck(not us.autoCheck) end })
-    table.insert(upItems, { title = "Auto-apply updates", checked = us.autoApply, fn = function() updater.setAutoApply(not us.autoApply) end })
-    table.insert(upItems, { title = "Live reload on file save", checked = us.liveReload, fn = function() updater.setLiveReload(not us.liveReload) end })
-    table.insert(upItems, { title = "-" })
-    table.insert(upItems, { title = "Last check: " .. (us.lastCheck and humanAgo(us.lastCheck) or "never"), disabled = true })
-    if us.dirty then table.insert(upItems, { title = "⚠ Working tree dirty — apply blocked", disabled = true }) end
-    if us.error then table.insert(upItems, { title = "⚠ " .. us.error:sub(1, 100), disabled = true }) end
-    table.insert(items, { title = "Updates", menu = upItems })
-
-    local debugItems = {
-      { title = "Open Hammerspoon console", fn = function() hs.openConsole() end },
-      { title = "Dump fetcher response to debug/<account>-last-fetcher.json",
-        checked = get("dump_fetcher", false) == true,
-        fn = function() set("dump_fetcher", not (get("dump_fetcher", false) == true)) end },
-      { title = "-" },
-      { title = "Force re-fetch now", fn = refresh },
-      { title = "Copy state JSON", fn = function()
-          hs.pasteboard.setContents(hs.json.encode(getState(), true))
-          hs.alert.show("state JSON copied (" .. acct.id .. ")")
-        end },
-      { title = "Copy fetch log (in-memory)", fn = function()
-          hs.pasteboard.setContents(table.concat(state.logRing, "\n"))
-          hs.alert.show("log copied (" .. #state.logRing .. " lines)")
-        end },
-      { title = "Open debug dir", fn = function() openUrl("file://" .. DEBUG_DIR) end },
-      { title = "-" },
-      { title = "Wipe login-window browser data (all sites)", fn = function()
-          hs.webview.datastore.default():removeRecordsAfter(0, hs.webview.datastore.websiteDataTypes(), function()
-            hs.alert.show("browser data wiped")
-          end)
-        end },
-      { title = "Reload module (hot)", fn = function()
-          M.stopAll()
-          for _, mod in ipairs({ "", ".menubar", ".session", ".login", ".claude", ".codex", ".grok", ".grokbot", ".state", ".updater" }) do
-            package.loaded[PREFIX .. mod] = nil
-          end
-          require(PREFIX)
-        end },
-      { title = "-" },
-      { title = "Log level: " .. (get("log_level", "info")),
-        fn = function()
-          local cur = get("log_level", "info")
-          local nxt = ({ info = "debug", debug = "verbose", verbose = "warning", warning = "error", error = "info" })[cur] or "info"
-          set("log_level", nxt)
-          hs.alert.show("log level → " .. nxt .. " (reload module to apply)")
-        end },
-    }
-    table.insert(items, { title = "Debug", menu = debugItems })
-
-    table.insert(items, { title = "-" })
-    local verLine = "About claude-usage v" .. M.VERSION .. " · " .. acct.id
-    if us.sha then verLine = verLine .. " · " .. us.sha end
-    table.insert(items, { title = verLine, disabled = true })
-    table.insert(items, { title = "    " .. os.getenv("HOME") .. "/.hammerspoon/claude_usage", disabled = true })
-    table.insert(items, { title = "Quit", fn = function() M.stopAll() end })
-
-    return items
-  end
-
-  instance.bar = hs.menubar.new()
-  if not instance.bar then
-    log.e("hs.menubar.new returned nil for " .. acct.id)
-    return nil
-  end
-  instance.bar:setTitle("… loading")
-  instance.bar:setMenu(function(mods) return buildMenu(mods and (mods.ctrl or mods.alt)) end)
-
-  if not M._updaterStarted then
-    updater.start()
-    M._updaterStarted = true
-  end
-
-  instance.refresh = refresh
-  instance.applyTitle = applyTitle
-  instance.stop = function()
+  function instance.stop()
     if instance.fetchTimer then instance.fetchTimer:stop() end
-    if instance.titleTimer then instance.titleTimer:stop() end
-    if instance.bar then instance.bar:delete(); instance.bar = nil end
   end
-
-  refresh()
-  instance.fetchTimer = hs.timer.doEvery(60, refresh)
-  instance.titleTimer = hs.timer.doEvery(60, applyTitle)
 
   M.instances[acct.id] = instance
+  ensureBar()
+  instance.refresh()
+  instance.fetchTimer = hs.timer.doEvery(60, instance.refresh)
   log.i("started v" .. M.VERSION .. " account=" .. acct.id)
   state.log("i", "started v" .. M.VERSION .. " (" .. acct.id .. ")")
   return instance
 end
 
-function M.applyAllTitles()
-  for _, inst in pairs(M.instances) do
-    if inst.applyTitle then inst.applyTitle() end
-  end
-end
-
 function M.stopAll()
   for _, inst in pairs(M.instances) do inst.stop() end
   M.instances = {}
+  if M.titleTimer then M.titleTimer:stop(); M.titleTimer = nil end
+  if M.bar then M.bar:delete(); M.bar = nil end
   if M._updaterStarted then
     updater.stop()
     M._updaterStarted = false

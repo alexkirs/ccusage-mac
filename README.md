@@ -1,9 +1,9 @@
 # ccusage-mac
 
-Your AI subscription limits in the macOS menu bar. One block per account.
+Your AI subscription limits in the macOS menu bar. One strip, one block per account.
 
 <p align="center">
-  <img src="docs/menubar-accounts.png" alt="menu bar: grokbot 27% · codex 99% · claude 39·24" width="440">
+  <img src="docs/menubar-accounts.png" alt="menu bar: claude 47·25 · codex 99 · grokbot 47" width="320">
 </p>
 
 Each block: **% used** (5-hour · weekly, or just weekly) and **time until reset**.
@@ -45,12 +45,10 @@ That's it. Numbers show up within a minute.
 
 ## Add more accounts
 
-Click any block → **Accounts → Add … account…** → sign in → close the window.
-Each account gets its own block.
-
-The same **Accounts** menu lists every account: log in / log out, rename the
-label on the icon, hide the block (keeps the session, frees menu bar space),
-remove it.
+Click the strip → **Add account → …** → sign in → close the window.
+Each account gets its own block in the strip and its own submenu: usage
+detail, log in / log out, rename the label, hide the block (keeps the
+session, frees menu bar space), remove it.
 
 ## Good to know
 
