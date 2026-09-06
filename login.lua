@@ -26,8 +26,15 @@ local function setNormalWindowLevel(wv) pcall(function() wv:level(hs.drawing.win
 function M.open(provider, onDone)
   if loginWV then loginWV:show():bringToFront(); return end
   local spec = provider.login
-  loginLog("wipe %s then open", provider.domain)
-  session.wipe(provider.domain, function() M.openWindow(provider, spec, onDone) end)
+  local domains = provider.wipeDomains or { provider.domain }
+  loginLog("wipe %s then open", table.concat(domains, ","))
+  local pending = #domains
+  for _, d in ipairs(domains) do
+    session.wipe(d, function()
+      pending = pending - 1
+      if pending == 0 then M.openWindow(provider, spec, onDone) end
+    end)
+  end
 end
 
 function M.openWindow(provider, spec, onDone)
@@ -112,7 +119,7 @@ function M.openWindow(provider, spec, onDone)
   -- hidden fetch of an authed endpoint detects that.
   local probing, tickCount, lastTickURL = false, 0, nil
   local function runProbe()
-    if probing or done then return end
+    if probing or done or not spec.probeUrl then return end
     probing = true
     probeWV = hs.webview.new({ x = -9000, y = -9000, w = 400, h = 400 }, { javaScriptEnabled = true })
     if not probeWV then probing = false; return end
@@ -150,6 +157,12 @@ function M.openWindow(provider, spec, onDone)
     if u ~= lastTickURL then loginLog("tick url=%s", u); lastTickURL = u end
     if spec.isAuthedUrl(u) then finish("tick authed url: " .. u); return end
     if tickCount >= 3 and (tickCount % 5) == 0 then runProbe() end
+    -- Fallback detector: the session cookie shows up in the on-disk jar.
+    -- Only after 20 s, so the pre-login wipe has reached the file first.
+    if tickCount >= 20 and (tickCount % 5) == 0
+       and session.pick(session.readJar(), provider.domain, provider.cookiePrefix) then
+      finish("cookie landed in jar")
+    end
   end)
 
   loginWV:url(spec.startUrl)

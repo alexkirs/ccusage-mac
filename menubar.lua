@@ -7,13 +7,14 @@ local log = state.logger("menubar")
 local get, set = state.get, state.set
 
 local M = {}
-M.VERSION = "0.3.0"
+M.VERSION = "0.3.1"
 M.PREFIX = PREFIX
 M.PROVIDERS = {
   claude = require(PREFIX .. ".claude"),
   codex  = require(PREFIX .. ".codex"),
+  grok   = require(PREFIX .. ".grok"),
 }
-M.PROVIDER_ORDER = { "claude", "codex" }
+M.PROVIDER_ORDER = { "claude", "codex", "grok" }
 M.instances = {}            -- keyed by account id
 M.accounts = {}             -- registry (list), persisted via state.saveAccounts
 M._updaterStarted = false
@@ -212,8 +213,8 @@ end
 local function buildBlockIcon(label, w5h, w1w, showReset)
   -- Weekly-only providers (Codex since 2026-07 has no 5h window): render a
   -- single number driven by the weekly window instead of "?·N".
-  local single = not w5h and w1w
-  local fh = single and w1w.percentUsed or (w5h and w5h.percentUsed or "?")
+  local single = (not w5h) ~= (not w1w)
+  local fh = single and (w5h or w1w).percentUsed or (w5h and w5h.percentUsed or "?")
   local w  = w1w and w1w.percentUsed or "?"
   local row1str = single and tostring(fh) or (tostring(fh) .. "·" .. tostring(w))
   local row1 = single and seg(tostring(fh), colorForUsed(fh)) or pctRow(fh, w)
@@ -374,8 +375,8 @@ function M.start(acct)
     if s.status == "init" then return "… loading" end
     if s.status == "error" and not (s.fiveHour or s.weekly) then return "⚠ err" end
     local fmt = get("format", DEFAULT_FORMAT)
-    if not s.fiveHour and s.weekly then
-      local w = s.weekly.percentUsed
+    if (not s.fiveHour) ~= (not s.weekly) then
+      local w = (s.fiveHour or s.weekly).percentUsed
       local st = run(tostring(w), colorForUsed(w))
       if fmt == "labeled" then return run("1w", NEUTRAL_COLOR) .. st end
       if fmt == "compact_reset" then
@@ -480,7 +481,7 @@ function M.start(acct)
         { title = "5h: " .. tupleOrDash(s.fiveHour), disabled = true },
         { title = "1w: " .. tupleOrDash(s.weekly),   disabled = true },
       }
-      if pid == "codex" and get("spark_bar", false) and s.additional then
+      if get("spark_bar", false) and s.additional then
         for _, a in ipairs(s.additional) do
           table.insert(m, { title = "-" })
           table.insert(m, { title = a.label or "additional", disabled = true })
@@ -511,10 +512,10 @@ function M.start(acct)
           windowBlock(items, "1w window", a.weekly)
         end
       end
-      if pid == "codex" and hasAdditional then
+      if hasAdditional then
         table.insert(items, { title = "-" })
         table.insert(items, {
-          title = "Show Spark limits",
+          title = "Show per-model limits",
           checked = showSpark,
           fn = function() set("spark_bar", not showSpark); M.applyAllTitles() end,
         })
@@ -690,7 +691,7 @@ function M.start(acct)
         end },
       { title = "Reload module (hot)", fn = function()
           M.stopAll()
-          for _, mod in ipairs({ "", ".menubar", ".session", ".login", ".claude", ".codex", ".state", ".updater" }) do
+          for _, mod in ipairs({ "", ".menubar", ".session", ".login", ".claude", ".codex", ".grok", ".state", ".updater" }) do
             package.loaded[PREFIX .. mod] = nil
           end
           require(PREFIX)

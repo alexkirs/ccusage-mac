@@ -9,17 +9,20 @@ local menubar = require(PREFIX .. ".menubar")
 local accounts = state.accounts()
 
 -- First run (or migration from the webview era): adopt whatever sessions the
--- shared jar already holds, one account per provider. Missing session just
--- yields a "⚠ login" item, same as before.
+-- shared jar already holds, one account per provider. Nothing there → a
+-- single "⚠ login" Claude item to start from; more via Accounts → Add.
 if #accounts == 0 then
   local jar = session.readJar()
   for _, pid in ipairs(menubar.PROVIDER_ORDER) do
     local p = menubar.PROVIDERS[pid]
     local ck, exp = session.pick(jar, p.domain, p.cookiePrefix)
-    local acct = { id = pid, provider = pid, cookie = ck, cookieExpires = exp }
-    if p.afterLogin then p.afterLogin(acct, jar[p.domain]) end
-    accounts[#accounts + 1] = acct
+    if ck then
+      local acct = { id = pid, provider = pid, cookie = ck, cookieExpires = exp }
+      if p.afterLogin then p.afterLogin(acct, jar[p.domain]) end
+      accounts[#accounts + 1] = acct
+    end
   end
+  if #accounts == 0 then accounts[1] = { id = "claude", provider = "claude" } end
   state.saveAccounts(accounts)
 end
 
