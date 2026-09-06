@@ -7,7 +7,7 @@ local log = state.logger("menubar")
 local get, set = state.get, state.set
 
 local M = {}
-M.VERSION = "0.3.2"
+M.VERSION = "0.3.3"
 M.PREFIX = PREFIX
 M.PROVIDERS = {
   claude = require(PREFIX .. ".claude"),
@@ -351,15 +351,32 @@ function M.addAccount(providerId)
   end)
 end
 
+-- Log out = drop the account. The only remaining account can't vanish (the
+-- menu must stay reachable), so it just loses its session instead.
+function M.logoutAccount(acct)
+  local provider = M.PROVIDERS[acct.provider]
+  provider.logout(acct, function()
+    acct.cookie, acct.cookieExpires = nil, nil
+    M.save()
+    if #M.accounts > 1 then
+      M.removeAccount(acct.id)
+    else
+      local inst = M.instances[acct.id]; if inst then inst.refresh() end
+    end
+  end)
+end
+
 function M.removeAccount(id)
+  if #M.accounts <= 1 then hs.alert.show("Can't remove the only account"); return end
   local target
   for _, a in ipairs(M.accounts) do if a.id == id then target = a end end
-  if target and not target.hidden and visibleCount() <= 1 then hs.alert.show("Keep at least one item visible"); return end
   local inst = M.instances[id]
   if inst then inst.stop(); M.instances[id] = nil end
   for i, a in ipairs(M.accounts) do
     if a.id == id then table.remove(M.accounts, i); break end
   end
+  -- Never leave the menu bar empty: unhide the first remaining account.
+  if visibleCount() == 0 then M.setHidden(M.accounts[1], false) end
   M.save()
 end
 
@@ -412,9 +429,7 @@ function M.accountsMenu()
     }
     if a.cookie then
       table.insert(sub, { title = "Refresh now", disabled = not inst, fn = function() if inst then inst.refresh() end end })
-      table.insert(sub, { title = "Log out", fn = function()
-        provider.logout(a, function() a.cookie, a.cookieExpires = nil, nil; M.save(); if inst then inst.refresh() end end)
-      end })
+      table.insert(sub, { title = #M.accounts > 1 and "Log out & remove" or "Log out", fn = function() M.logoutAccount(a) end })
     else
       table.insert(sub, { title = "Log in to " .. provider.loginLabel .. "…", fn = function()
         loginInto(a, provider, function() local i = M.instances[a.id]; if i then i.refresh() end end)
@@ -429,8 +444,10 @@ function M.accountsMenu()
       end
     end })
     table.insert(sub, { title = "Show in menu bar", checked = not a.hidden, fn = function() M.setHidden(a, not a.hidden) end })
-    table.insert(sub, { title = "-" })
-    table.insert(sub, { title = "Remove account", disabled = #M.accounts <= 1, fn = function() M.removeAccount(a.id) end })
+    if not a.cookie then
+      table.insert(sub, { title = "-" })
+      table.insert(sub, { title = "Remove account", disabled = #M.accounts <= 1, fn = function() M.removeAccount(a.id) end })
+    end
     table.insert(items, { title = (a.label or provider.label) .. "  ·  " .. provider.loginLabel .. "  ·  " .. statusLine(a), menu = sub })
   end
   return items
@@ -526,13 +543,7 @@ function M.start(acct)
 
   local function doLogin() loginInto(acct, provider, refresh) end
 
-  local function doLogout()
-    provider.logout(acct, function()
-      acct.cookie, acct.cookieExpires = nil, nil
-      M.save()
-      refresh()
-    end)
-  end
+  local function doLogout() M.logoutAccount(acct) end
 
   local function toggleExtraUsage()
     if not provider.toggleExtraUsage then return end
@@ -654,7 +665,7 @@ function M.start(acct)
           fn = function() openUrl(provider.openSettingsUrl) end,
         })
       end
-      local logoutLabel = "Log out (" .. s.account.email
+      local logoutLabel = (#M.accounts > 1 and "Log out & remove (" or "Log out (") .. s.account.email
                        .. (s.account.orgName and (" · " .. s.account.orgName) or "") .. ")"
       table.insert(items, { title = logoutLabel, fn = doLogout })
     else
