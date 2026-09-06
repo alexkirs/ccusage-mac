@@ -1,8 +1,9 @@
 # claude-usage
 
 macOS menu bar widget showing **5-hour** and **weekly** usage limits for
-claude.ai and Codex (chatgpt.com), one menu bar item per account. Any number
-of accounts per provider. Refreshed every 60 s.
+claude.ai, Codex (chatgpt.com), Grok (grok.com weekly pool) and Grok Bot
+(metered on cursor.com), one menu bar item per account. Any number of
+accounts per provider. Refreshed every 60 s.
 Runs as a [Hammerspoon](https://www.hammerspoon.org/) Lua module.
 
 <p align="center">
@@ -39,7 +40,7 @@ Hammerspoon auto-launches at login, so the widget does too.
 | **Refresh now** | Force immediate fetch |
 | **Display format** | Compact / Compact + 5h reset / Labeled title style |
 | **Enable/Disable extra usage** | Toggle overage spending from the menu (Claude) |
-| **Accounts → Add … account…** | Log into another claude.ai / chatgpt.com account; it gets its own item |
+| **Accounts → Add … account…** | Log into another claude.ai / chatgpt.com / grok.com / cursor.com (Grok Bot) account; it gets its own item |
 | **Accounts → Rename…** | Short label drawn on the item (e.g. `work`) |
 | **Accounts → Remove this account** | Drop the item and its stored session |
 

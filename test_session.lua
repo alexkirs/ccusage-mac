@@ -49,6 +49,12 @@ assert(g.fiveHour == nil and #g.additional == 0)
 -- trailers-only unauthenticated → needs_login
 assert(grok.decodeCredits("gAAAABBncnBjLXN0YXR1czoxNg0K").status == "needs_login")
 
+-- grokbot: Connect-JSON shape from cursor.com's dashboard proxy.
+local grokbot = require(name .. ".grokbot")
+local gb = grokbot.mapResponse({ usagePercent = 12.4, nextResetTimestampUtc = "2026-09-12T18:49:00Z", currentPeriodStart = "2026-09-05T18:49:00Z", hasNonZeroIncludedLimit = true })
+assert(gb.status == "ok" and gb.weekly.percentUsed == 12 and gb.weekly.resetsAt and gb.weekly.resetsAt > 1789000000, hs.inspect(gb))
+assert(grokbot.mapResponse({}).status == "error")
+
 -- Real jar parses without throwing (contents not asserted, machine-specific).
 local real = session.readJar()
 assert(type(real) == "table")

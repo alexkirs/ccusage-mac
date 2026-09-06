@@ -13,8 +13,9 @@ M.PROVIDERS = {
   claude = require(PREFIX .. ".claude"),
   codex  = require(PREFIX .. ".codex"),
   grok   = require(PREFIX .. ".grok"),
+  grokbot = require(PREFIX .. ".grokbot"),
 }
-M.PROVIDER_ORDER = { "claude", "codex", "grok" }
+M.PROVIDER_ORDER = { "claude", "codex", "grok", "grokbot" }
 M.instances = {}            -- keyed by account id
 M.accounts = {}             -- registry (list), persisted via state.saveAccounts
 M._updaterStarted = false
@@ -691,7 +692,7 @@ function M.start(acct)
         end },
       { title = "Reload module (hot)", fn = function()
           M.stopAll()
-          for _, mod in ipairs({ "", ".menubar", ".session", ".login", ".claude", ".codex", ".grok", ".state", ".updater" }) do
+          for _, mod in ipairs({ "", ".menubar", ".session", ".login", ".claude", ".codex", ".grok", ".grokbot", ".state", ".updater" }) do
             package.loaded[PREFIX .. mod] = nil
           end
           require(PREFIX)
