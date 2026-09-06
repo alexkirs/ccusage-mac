@@ -2,7 +2,8 @@
 -- Independent live-reload: pathwatcher reloads Hammerspoon on any .lua save.
 -- Both toggles live on the menu and are on by default.
 
-local state = require("claude_usage.state")
+local PREFIX = ((...) or "claude_usage"):gsub("%.[^.]+$", "")
+local state = require(PREFIX .. ".state")
 local log = state.logger("updater")
 
 local M = {}

@@ -1,7 +1,8 @@
 # claude-usage
 
-macOS menu bar widget showing Claude's **5-hour** and **weekly** usage limits.
-Scraped from [claude.ai/settings/usage](https://claude.ai/settings/usage), refreshed every 60 s.
+macOS menu bar widget showing **5-hour** and **weekly** usage limits for
+claude.ai and Codex (chatgpt.com), one menu bar item per account. Any number
+of accounts per provider. Refreshed every 60 s.
 Runs as a [Hammerspoon](https://www.hammerspoon.org/) Lua module.
 
 <p align="center">
@@ -19,8 +20,13 @@ echo 'require("claude_usage")' >> ~/.hammerspoon/init.lua
 Then:
 
 1. Launch **Hammerspoon** (grant Accessibility on first run).
-2. Click the menu bar icon → **Log in…** → log into claude.ai → close the window.
+2. Click a menu bar icon → **Log in…** → log into the site → close the window.
 3. Values appear within ~60 s.
+
+Login happens in a WebKit window; the widget then keeps only the session
+cookie (in `hs.settings`) and polls the site's JSON API directly. Sessions
+last as long as the site allows (claude.ai ~30 days, chatgpt.com ~90 days),
+then the item shows `⚠ login` again.
 
 Hammerspoon auto-launches at login, so the widget does too.
 
@@ -32,7 +38,10 @@ Hammerspoon auto-launches at login, so the widget does too.
 | **Ctrl/Alt-click** | Compact two-line summary |
 | **Refresh now** | Force immediate fetch |
 | **Display format** | Compact / Compact + 5h reset / Labeled title style |
-| **Enable/Disable extra usage** | Toggle overage spending from the menu |
+| **Enable/Disable extra usage** | Toggle overage spending from the menu (Claude) |
+| **Accounts → Add … account…** | Log into another claude.ai / chatgpt.com account; it gets its own item |
+| **Accounts → Rename…** | Short label drawn on the item (e.g. `work`) |
+| **Accounts → Remove this account** | Drop the item and its stored session |
 
 ## Updates
 

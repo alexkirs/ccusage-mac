@@ -1,36 +1,5 @@
 local M = {}
 
-M.data = {
-  fiveHour = nil,
-  weekly = nil,
-  weeklySonnet = nil,
-  weeklyOpus = nil,
-  weeklyHaiku = nil,
-  spend = nil,
-  account = nil,     -- { email, fullName, orgUuid, orgName }
-  extraUsage = nil,  -- { isEnabled, monthlyLimit, usedCredits, utilization, currency }
-  warnings = nil,
-  lastFetch = nil,
-  status = "init",
-  errorMsg = nil,
-  fetchTiming = { totalMs = 0 },
-}
-
--- Parallel state for the Codex provider. Same shape as M.data; populated by
--- codex_data.lua. additional[] is a list of { label, fiveHour, weekly } for
--- per-model rate limits the API returns alongside the primary windows.
-M.codexData = {
-  fiveHour = nil,
-  weekly = nil,
-  additional = nil,  -- list of { label, fiveHour, weekly }
-  account = nil,     -- { email, orgName }
-  warnings = nil,
-  lastFetch = nil,
-  status = "init",
-  errorMsg = nil,
-  fetchTiming = { totalMs = 0 },
-}
-
 M.logRing = {}
 M.fetchTimings = {}
 
@@ -45,6 +14,14 @@ function M.get(k, default)
 end
 
 function M.set(k, v) hs.settings.set(NS .. k, v) end
+
+-- Account registry. One entry per menubar item:
+--   { id, provider, label?, cookie?, cookieExpires?, orgUuid? }
+-- cookie is the ready-to-send "Cookie:" header value for that account's
+-- session. Plaintext in the settings plist, same protection level WebKit's
+-- own cookie file has.
+function M.accounts() return M.get("accounts", {}) end
+function M.saveAccounts(list) M.set("accounts", list) end
 
 -- Logger factory. Honors the current log_level setting without each module
 -- having to call hs.settings.get itself.
