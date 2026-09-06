@@ -34,11 +34,7 @@ mkdir -p "$TARGET/debug"
 cat <<EOF
 
 Done. Next:
-  1. Launch or reload Hammerspoon (menu bar → Reload Config, or cmd+opt+ctrl+R).
-  2. Menu bar item appears as '⚠ login'. Click it → 'Log in…'.
-  3. Log in to claude.ai in the window that opens, then close it.
-  4. Values appear within ~60s (or click 'Refresh now').
-
-Debug menu exposes: save artifacts, replay mode, visible fetch webview,
-state/log clipboard copy, force refetch, cookie wipe, hot reload.
+  1. Open Hammerspoon (or reload its config).
+  2. Click the '⚠ login' menu bar item → 'Log in to claude.ai…' → sign in → close the window.
+  3. More accounts: click any block → Accounts → Add … account…
 EOF

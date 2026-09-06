@@ -1,78 +1,68 @@
-# claude-usage
+# ccusage-mac
 
-macOS menu bar widget showing **5-hour** and **weekly** usage limits for
-claude.ai, Codex (chatgpt.com), Grok (grok.com weekly pool) and Grok Bot
-(metered on cursor.com), one menu bar item per account. Any number of
-accounts per provider. Refreshed every 60 s.
-Runs as a [Hammerspoon](https://www.hammerspoon.org/) Lua module.
+Your AI subscription limits in the macOS menu bar. One block per account.
 
 <p align="center">
-  <img src="docs/menu.png" alt="claude-usage menu bar widget" width="340">
+  <img src="docs/menubar-accounts.png" alt="menu bar: grokbot 27% · codex 99% · claude 39·24" width="440">
 </p>
+
+Each block: **% used** (5-hour · weekly, or just weekly) and **time until reset**.
+Green → yellow → orange → red as you burn through the limit.
+
+Works with:
+
+| Service | What it shows |
+|---|---|
+| **Claude** (claude.ai) | 5h and weekly limits, extra usage on/off |
+| **Codex** (chatgpt.com) | weekly limit, Spark per-model limit |
+| **Grok** (grok.com) | SuperGrok weekly pool |
+| **Grok Bot** (cursor.com) | Grok Bot weekly allowance |
+
+Any number of accounts per service. Refreshes every 60 s.
 
 ## Install
 
-```bash
-brew install --cask hammerspoon
-git clone https://github.com/alexkirs/ccusage-mac.git ~/.hammerspoon/claude_usage
-echo 'require("claude_usage")' >> ~/.hammerspoon/init.lua
-```
+1. Install [Hammerspoon](https://www.hammerspoon.org/) (a free macOS automation app the widget runs inside):
 
-Then:
+   ```bash
+   brew install --cask hammerspoon
+   ```
 
-1. Launch **Hammerspoon** (grant Accessibility on first run).
-2. Click a menu bar icon → **Log in…** → log into the site → close the window.
-3. Values appear within ~60 s.
+2. Install the widget:
 
-Login happens in a WebKit window; the widget then keeps only the session
-cookie (in `hs.settings`) and polls the site's JSON API directly. Sessions
-last as long as the site allows (claude.ai ~30 days, chatgpt.com ~90 days),
-then the item shows `⚠ login` again.
+   ```bash
+   git clone https://github.com/alexkirs/ccusage-mac.git ~/.hammerspoon/claude_usage
+   echo 'require("claude_usage")' >> ~/.hammerspoon/init.lua
+   ```
 
-Hammerspoon auto-launches at login, so the widget does too.
+3. Open **Hammerspoon** from Applications. Allow Accessibility when it asks.
 
-## Use
+4. A `⚠ login` item appears in the menu bar. Click it → **Log in to claude.ai…** → sign in → close the window.
 
-| Action | Result |
-|---|---|
-| **Click** menu bar | Full menu: per-window %, reset times, Extra usage, actions |
-| **Ctrl/Alt-click** | Compact two-line summary |
-| **Refresh now** | Force immediate fetch |
-| **Display format** | Compact / Compact + 5h reset / Labeled title style |
-| **Enable/Disable extra usage** | Toggle overage spending from the menu (Claude) |
-| **Accounts → Add … account…** | Log into another claude.ai / chatgpt.com / grok.com / cursor.com (Grok Bot) account; it gets its own item |
-| **Accounts → <account> →** | Every account is listed in every item's menu: status, Log in, Log out & remove, Rename (short label on the icon), Show in menu bar, Remove |
-| **Show in menu bar** (off) | Keeps the session but drops the icon; handy when the menu bar overflows |
+That's it. Numbers show up within a minute.
 
-## Updates
+## Add more accounts
 
-Built-in. Menu → **Updates**:
+Click any block → **Accounts → Add … account…** → sign in → close the window.
+Each account gets its own block.
 
-- `Check for updates now` — manual check
-- `Check daily` (on by default) — auto-fetch origin/main every 24 h
-- `Auto-apply updates` (on by default) — pull + reload silently when a new commit lands
-- Toggle `Auto-apply updates` off if you'd rather review each release; an `⬆ Update available · Apply & reload` row appears inline when behind
+The same **Accounts** menu lists every account: log in / log out, rename the
+label on the icon, hide the block (keeps the session, frees menu bar space),
+remove it.
 
-No `git pull` needed.
+## Good to know
+
+- Sessions expire when the site says so (Claude ~30 days, others longer). The block turns into `⚠ login`; click it and sign in again.
+- Sign-in happens in a normal browser window inside Hammerspoon. Your Safari/Chrome logins are not touched.
+- The widget updates itself from this repo daily (menu → **Updates** to turn that off).
 
 ## Uninstall
 
 ```bash
 rm -rf ~/.hammerspoon/claude_usage
-# edit ~/.hammerspoon/init.lua and remove: require("claude_usage")
 ```
 
-## Dev
-
-Work on the code with live reload:
-
-```bash
-git clone https://github.com/alexkirs/ccusage-mac.git
-cd ccusage-mac
-./install.sh   # symlinks into ~/.hammerspoon
-```
-
-`Live reload on file save` is on by default (~300 ms debounce on any `.lua` change). Toggle it, `Check daily`, and `Auto-apply updates` from the menu's **Updates** submenu. If you're editing code locally and don't want auto-pulls clobbering your work, flip `Auto-apply updates` off — `git pull --ff-only` also refuses unsafe merges on its own.
+and delete the `require("claude_usage")` line from `~/.hammerspoon/init.lua`.
 
 ## License
 
