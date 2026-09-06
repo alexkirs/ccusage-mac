@@ -40,6 +40,15 @@ assert(parsed["example.com"] and parsed["example.com"].tok.value == "secret", "p
 assert(parsed["example.com"].tok.expires == 2000000000)
 assert(next(session.parseJar("nope")) == nil)
 
+-- grok: grpc-web-text response captured 2026-09-07 (weekly pool, 0% used, period ends 2026-09-13 17:42:45Z).
+local grok = require(name .. ".grok")
+local g = grok.decodeCredits("AAAAAEgKRhIAGgAiDAiVzPbUBhCY2uzWAioMCJXBm9UGEJja7NYCQh4IAhIMCJXM9tQGEJja7NYCGgwIlcGb1QYQmNrs1gJYAWIAaAE=gAAAAA9ncnBjLXN0YXR1czowDQo=")
+assert(g.status == "ok", g.errorMsg)
+assert(g.weekly.percentUsed == 0 and g.weekly.resetsAt == 1789321365 and g.weekly.periodType == "weekly", hs.inspect(g.weekly))
+assert(g.fiveHour == nil and #g.additional == 0)
+-- trailers-only unauthenticated → needs_login
+assert(grok.decodeCredits("gAAAABBncnBjLXN0YXR1czoxNg0K").status == "needs_login")
+
 -- Real jar parses without throwing (contents not asserted, machine-specific).
 local real = session.readJar()
 assert(type(real) == "table")
