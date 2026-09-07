@@ -1,6 +1,6 @@
 -- Claude / Codex usage menubar widget for Hammerspoon.
 -- Entry: `require("claude_usage")` from ~/.hammerspoon/init.lua
--- One menubar item per account in the registry (state.accounts()).
+-- One menubar strip, one block per account in the registry (state.accounts()).
 local PREFIX = (...) or "claude_usage"
 local state = require(PREFIX .. ".state")
 local session = require(PREFIX .. ".session")
@@ -9,8 +9,8 @@ local menubar = require(PREFIX .. ".menubar")
 local accounts = state.accounts()
 
 -- First run (or migration from the webview era): adopt whatever sessions the
--- shared jar already holds, one account per provider. Nothing there → a
--- single "⚠ login" Claude item to start from; more via Accounts → Add.
+-- shared jar already holds, one account per provider. Nothing there → an
+-- empty "+" strip; accounts come in via Add account.
 if #accounts == 0 then
   local jar = session.readJar()
   for _, pid in ipairs(menubar.PROVIDER_ORDER) do
@@ -22,11 +22,11 @@ if #accounts == 0 then
       accounts[#accounts + 1] = acct
     end
   end
-  if #accounts == 0 then accounts[1] = { id = "claude", provider = "claude" } end
   state.saveAccounts(accounts)
 end
 
 menubar.accounts = accounts
+menubar.ensureBar()
 for _, acct in ipairs(accounts) do menubar.start(acct) end
 
 return menubar

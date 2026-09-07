@@ -37,7 +37,7 @@ Any number of accounts per service. Refreshes every 60 s.
 
 3. Open **Hammerspoon** from Applications. Allow Accessibility when it asks.
 
-4. A `claude ⚠` block appears in the menu bar. Click it → **claude · claude.ai** → **Log in to claude.ai…** → sign in → close the window.
+4. A `+` appears in the menu bar. Click it → **Add account** → pick a service → sign in → close the window.
 
 5. So it survives a reboot: click the Hammerspoon hammer icon in the menu bar → **Preferences…** → tick **Launch Hammerspoon at login**.
 
@@ -45,7 +45,7 @@ That's it. Numbers show up within a minute.
 
 ## Add more accounts
 
-Click the strip → **Add account → …** → sign in → close the window.
+Same thing again: **Add account** → pick a service → sign in.
 Each account gets its own block in the strip and its own submenu: usage
 detail, log in / log out, rename the label, hide the block (keeps the
 session, frees menu bar space), remove it.

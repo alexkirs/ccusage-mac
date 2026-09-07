@@ -287,12 +287,6 @@ end
 
 function M.save() state.saveAccounts(M.accounts) end
 
-local function visibleCount()
-  local n = 0
-  for _, a in ipairs(M.accounts) do if not a.hidden then n = n + 1 end end
-  return n
-end
-
 local function fmtDays(epoch)
   if not epoch then return nil end
   local d = math.floor((epoch - os.time()) / 86400)
@@ -330,34 +324,28 @@ function M.addAccount(providerId)
   end)
 end
 
--- Log out = drop the account. The only remaining account can't vanish (the
--- menu must stay reachable), so it just loses its session instead.
+-- Log out = drop the account. The strip stays reachable even when empty.
 function M.logoutAccount(acct)
   local provider = M.PROVIDERS[acct.provider]
   provider.logout(acct, function()
     acct.cookie, acct.cookieExpires = nil, nil
-    M.save()
-    if #M.accounts > 1 then M.removeAccount(acct.id) else refreshAcct(acct) end
+    M.removeAccount(acct.id)
   end)
 end
 
 function M.removeAccount(id)
-  if #M.accounts <= 1 then hs.alert.show("Can't remove the only account"); return end
   local inst = M.instances[id]
   if inst then inst.stop(); M.instances[id] = nil end
   for i, a in ipairs(M.accounts) do
     if a.id == id then table.remove(M.accounts, i); break end
   end
-  -- Never leave the menu bar empty: unhide the first remaining account.
-  if visibleCount() == 0 then M.setHidden(M.accounts[1], false) end
   M.save()
   M.applyAllTitles()
 end
 
 -- Hidden accounts keep their session but get no block; useful when the menu
--- bar overflows. The last visible block can't be hidden.
+-- bar overflows.
 function M.setHidden(acct, hidden)
-  if hidden and visibleCount() <= 1 then hs.alert.show("Keep at least one block visible"); return end
   acct.hidden = hidden or nil
   M.save()
   local inst = M.instances[acct.id]
@@ -481,12 +469,12 @@ local function accountMenu(acct)
     if provider.openSettingsLabel and provider.openSettingsUrl then
       table.insert(items, { title = "Open " .. provider.openSettingsLabel, fn = function() openUrl(provider.openSettingsUrl) end })
     end
-    local logoutLabel = (#M.accounts > 1 and "Log out & remove (" or "Log out (") .. s.account.email
+    local logoutLabel = "Log out & remove (" .. s.account.email
                      .. (s.account.orgName and (" · " .. s.account.orgName) or "") .. ")"
     table.insert(items, { title = logoutLabel, fn = function() M.logoutAccount(acct) end })
   elseif acct.cookie and inst then
     table.insert(items, { title = "Refresh now", fn = refresh })
-    table.insert(items, { title = #M.accounts > 1 and "Log out & remove" or "Log out", fn = function() M.logoutAccount(acct) end })
+    table.insert(items, { title = "Log out & remove", fn = function() M.logoutAccount(acct) end })
   else
     table.insert(items, {
       title = (s.status == "needs_login" and "⚠  " or "") .. "Log in to " .. provider.loginLabel .. "…",
@@ -505,7 +493,7 @@ local function accountMenu(acct)
   end })
   table.insert(items, { title = "Show in menu bar", checked = not acct.hidden, fn = function() M.setHidden(acct, not acct.hidden) end })
   if not acct.cookie then
-    table.insert(items, { title = "Remove account", disabled = #M.accounts <= 1, fn = function() M.removeAccount(acct.id) end })
+    table.insert(items, { title = "Remove account", fn = function() M.removeAccount(acct.id) end })
   end
   return items
 end
@@ -617,7 +605,7 @@ function M.buildMenu(compact)
   for _, a in ipairs(M.accounts) do
     table.insert(items, { title = accountTitle(a), menu = accountMenu(a) })
   end
-  table.insert(items, { title = "-" })
+  if #M.accounts > 0 then table.insert(items, { title = "-" }) end
 
   local addItems = {}
   for _, p in ipairs(M.PROVIDER_ORDER) do
@@ -661,11 +649,11 @@ end
 -- The single menubar item + per-account fetch loops
 ---------------------------------------------------------------------
 
-local function ensureBar()
+function M.ensureBar()
   if M.bar then return end
   M.bar = hs.menubar.new()
   if not M.bar then log.e("hs.menubar.new returned nil"); return end
-  M.bar:setTitle("… loading")
+  M.bar:setTitle("+")
   M.bar:setMenu(function(mods) return M.buildMenu(mods and (mods.ctrl or mods.alt)) end)
   M.titleTimer = hs.timer.doEvery(60, M.applyAllTitles)  -- reset clocks tick
   if not M._updaterStarted then
@@ -682,8 +670,8 @@ function M.applyAllTitles()
     local inst = M.instances[a.id]
     if inst then for _, b in ipairs(inst.blocks()) do blocks[#blocks + 1] = b end end
   end
-  if #blocks == 0 then
-    M.bar:setIcon(nil, false); M.bar:setTitle("⚠ login")
+  if #blocks == 0 then  -- no accounts (or all hidden): bare "+" opens the menu
+    M.bar:setIcon(nil, false); M.bar:setTitle("+")
     return
   end
   M.bar:setIcon(buildComboIcon(blocks), false)
@@ -746,7 +734,7 @@ function M.start(acct)
   end
 
   M.instances[acct.id] = instance
-  ensureBar()
+  M.ensureBar()
   instance.refresh()
   instance.fetchTimer = hs.timer.doEvery(60, instance.refresh)
   log.i("started v" .. M.VERSION .. " account=" .. acct.id)
