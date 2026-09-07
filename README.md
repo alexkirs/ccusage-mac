@@ -8,7 +8,7 @@ Your AI subscription limits in the macOS menu bar. One strip, one block per acco
 
 Each block: **% used** (5-hour · weekly, or just weekly) and **time until reset**
 (`h:mm`, or `Nd` when it's more than a day away).
-Green → yellow → orange → red as you burn through the limit.
+Plain until 50 %, then yellow → orange → red as you burn through the limit.
 
 Works with:
 

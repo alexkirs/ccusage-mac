@@ -35,7 +35,7 @@ local THRESHOLDS = { watch = 50, careful = 70, danger = 85 }
 
 -- Tailwind -500 family: readable on both light and dark menu bar backgrounds.
 local BUCKET_COLOR = {
-  safe    = "#10B981",   -- emerald-500
+  safe    = "#10B981",   -- emerald-500 (menu only; blocks draw safe as plain text)
   watch   = "#F59E0B",   -- amber-500
   careful = "#F97316",   -- orange-500
   danger  = "#EF4444",   -- red-500
@@ -53,8 +53,22 @@ local function bucketFor(pctUsed)
   else return "safe" end
 end
 
+-- Returns true on dark mode. Re-checked on every render so theme toggles
+-- show within one titleTimer tick (60s) without explicit appearance hooks.
+local function isDarkMode()
+  return hs.host.interfaceStyle and hs.host.interfaceStyle() == "Dark"
+end
+
+-- Plain text color: gray-300 on dark, gray-500 on light. Labels, temperature,
+-- and usage numbers below the watch threshold all use it.
+local function textColor()
+  return isDarkMode() and "#D1D5DB" or "#6B7280"
+end
+
+-- Below 50% the number is plain text: only amber/orange/red carry a signal.
 local function colorForUsed(pctUsed)
   local b = bucketFor(pctUsed)
+  if b == "safe" then return textColor() end
   return b and BUCKET_COLOR[b] or NEUTRAL_COLOR
 end
 
@@ -110,16 +124,10 @@ local BAR_H   = 2   -- horizontal usage bar under the label
 local LABEL_SIZE = 9
 local LABEL_CW   = 5.42 -- Menlo-Bold 9 advance per glyph
 
--- Returns true on dark mode. Re-checked on every render so theme toggles
--- show within one titleTimer tick (60s) without explicit appearance hooks.
-local function isDarkMode()
-  return hs.host.interfaceStyle and hs.host.interfaceStyle() == "Dark"
-end
-
 -- Label (lowercase, bold 7px, theme gray) + bar (faint track, fill from the
 -- left) spanning the block width w.
 local function drawHeader(canvas, label, w, fillW, hex, tag)
-  local color = isDarkMode() and "#D1D5DB" or "#6B7280"  -- gray-300 / gray-500
+  local color = textColor()
   local font = { name = "Menlo-Bold", size = LABEL_SIZE }
   -- Label and tag are one text run, so the tag sits flush against the label
   -- (no gap; put a space in either if you want one).
