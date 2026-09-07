@@ -31,8 +31,9 @@ function M.open(provider, onDone)
   local domains = provider.wipeDomains or { provider.domain }
   loginLog("wipe %s then open", table.concat(domains, ","))
   local pending = #domains
+  local wipe = provider.fullCookieSet and session.wipeAll or session.wipe
   for _, d in ipairs(domains) do
-    session.wipe(d, function()
+    wipe(d, function()
       pending = pending - 1
       if pending == 0 then M.openWindow(provider, spec, onDone) end
     end)
@@ -71,6 +72,9 @@ function M.openWindow(provider, spec, onDone)
     pcall(function() hs.closeConsole() end)
     hs.alert.show("Reading session…", 2)
     session.waitFor(provider.domain, provider.cookiePrefix, 30, function(ck, exp, domainCookies)
+      if provider.fullCookieSet and domainCookies then
+        ck = session.headerFromCookies(domainCookies) or ck
+      end
       loginLog("harvest %s", ck and "ok" or "none")
       onDone(ck, exp, domainCookies)
     end)

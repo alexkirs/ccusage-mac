@@ -29,6 +29,11 @@ local M = {
   -- auth.openai.com keeps its own session; left alone, a second login just
   -- pre-fills the first account's email.
   wipeDomains = { "chatgpt.com", "auth.openai.com", "openai.com" },
+  -- chatgpt.com ties one OAuth token to one device: two accounts sharing the
+  -- login datastore's device id invalidate each other. Wipe all data (fresh
+  -- device id per login) and store the whole cookie set so each account
+  -- travels as its own device.
+  fullCookieSet = true,
 }
 
 M.login = {

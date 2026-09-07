@@ -79,6 +79,21 @@ function M.pick(jar, domain, prefix)
   return table.concat(parts, "; "), exp
 end
 
+-- Full Cookie header from every cookie WebKit stored for the domain, in name
+-- order. Unlike pick() this keeps oai-did (device id), _account, cf_clearance
+-- etc., so a multi-account service (chatgpt.com) sees each account as its own
+-- device and doesn't invalidate the others' OAuth token.
+function M.headerFromCookies(d)
+  if not d then return nil end
+  local names = {}
+  for n in pairs(d) do names[#names + 1] = n end
+  if #names == 0 then return nil end
+  table.sort(names)
+  local parts = {}
+  for _, n in ipairs(names) do parts[#parts + 1] = n .. "=" .. d[n].value end
+  return table.concat(parts, "; ")
+end
+
 -- WebKit flushes the jar to disk lazily (~10 s observed). Poll until the
 -- wanted cookies appear or timeoutS passes. cb(header|nil, expires, domainCookies)
 function M.waitFor(domain, prefix, timeoutS, cb)
@@ -99,6 +114,12 @@ end
 -- login window starts signed out. Takes ~10 s to reach the on-disk file.
 function M.wipe(domain, cb)
   hs.webview.datastore.default():removeRecordsFor(domain, "WKWebsiteDataTypeCookies", cb or function() end)
+end
+
+-- Like wipe but clears every data type (localStorage/IndexedDB too), so the
+-- next login mints a fresh device id instead of restoring a cached one.
+function M.wipeAll(domain, cb)
+  hs.webview.datastore.default():removeRecordsFor(domain, hs.webview.datastore.websiteDataTypes(), cb or function() end)
 end
 
 -- Replaces (or appends) name=value pairs in an existing Cookie header.
