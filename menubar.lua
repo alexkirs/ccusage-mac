@@ -107,8 +107,8 @@ end
 local ICON_H  = 33  -- label row + bar + two 11px text rows (menu bar is 34px)
 local LABEL_H = 9   -- top row holding the provider label
 local BAR_H   = 2   -- horizontal usage bar under the label
-local LABEL_SIZE = 8
-local LABEL_CW   = 4.8  -- Menlo-Bold 8 advance per glyph
+local LABEL_SIZE = 9
+local LABEL_CW   = 5.42 -- Menlo-Bold 9 advance per glyph
 
 -- Returns true on dark mode. Re-checked on every render so theme toggles
 -- show within one titleTimer tick (60s) without explicit appearance hooks.
