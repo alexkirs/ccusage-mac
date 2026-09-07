@@ -281,6 +281,13 @@ end
 -- Opens the login window for `acct`; on success stores the harvested cookie
 -- and refreshes. Shared by "Log in…" and "Add … account".
 local function loginInto(acct, provider, onDone)
+  if provider.customLogin then
+    provider.customLogin(acct, function()
+      M.save()
+      if onDone then onDone() end
+    end)
+    return
+  end
   login.open(provider, function(ck, exp, domainCookies)
     if not ck then
       hs.alert.show("No " .. provider.loginLabel .. " session found")
@@ -300,6 +307,7 @@ end
 function M.addAccount(providerId)
   local provider = M.PROVIDERS[providerId]
   local acct = { id = providerId .. "-" .. os.time(), provider = providerId }
+  if provider.homeFor then acct.codexHome = provider.homeFor(acct) end
   loginInto(acct, provider, function()
     table.insert(M.accounts, acct)
     M.save()
@@ -320,7 +328,10 @@ function M.removeAccount(id)
   local inst = M.instances[id]
   if inst then inst.stop(); M.instances[id] = nil end
   for i, a in ipairs(M.accounts) do
-    if a.id == id then table.remove(M.accounts, i); break end
+    if a.id == id then
+      if a.codexHome then os.execute("rm -rf '" .. a.codexHome .. "'") end
+      table.remove(M.accounts, i); break
+    end
   end
   M.save()
   M.applyAllTitles()
@@ -461,7 +472,7 @@ local function accountMenu(acct)
     local logoutLabel = "Log out & remove (" .. s.account.email
                      .. (s.account.orgName and (" · " .. s.account.orgName) or "") .. ")"
     table.insert(items, { title = logoutLabel, fn = function() M.logoutAccount(acct) end })
-  elseif acct.cookie and inst then
+  elseif (acct.cookie or acct.codexHome) and inst then
     table.insert(items, { title = "Refresh now", fn = refresh })
     table.insert(items, { title = "Log out & remove", fn = function() M.logoutAccount(acct) end })
   else

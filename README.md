@@ -15,11 +15,16 @@ Works with:
 | Service | What it shows |
 |---|---|
 | **Claude** (claude.ai) | 5h and weekly limits, extra usage on/off |
-| **Codex** (chatgpt.com) | weekly limit, Spark per-model limit |
+| **Codex** (chatgpt.com) | weekly limit, Spark per-model limit (via Codex CLI login) |
 | **Grok** (grok.com) | SuperGrok weekly pool |
 | **Grok Bot** (cursor.com) | Grok Bot weekly allowance |
 
 Any number of accounts per service. Refreshes every 60 s.
+
+Codex accounts sign in through the [Codex CLI](https://github.com/openai/codex)
+(`codex login --device-auth`), so the `codex` command must be installed. Each
+account gets its own isolated login, independent of whatever your terminal
+`codex` is logged into, so several Codex accounts show side by side.
 
 ## Install
 
