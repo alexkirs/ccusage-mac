@@ -375,6 +375,12 @@ local function accountMenu(acct)
   local loggedIn = s.status == "ok" and s.account and s.account.email ~= nil
   local function refresh() refreshAcct(acct) end
 
+  -- Hide toggle up top: checked = block is hidden from the strip (session
+  -- kept). Persists via setHidden → M.save().
+  table.insert(items, { title = "Hide", checked = acct.hidden == true,
+    fn = function() M.setHidden(acct, not acct.hidden) end })
+  table.insert(items, { title = "-" })
+
   if loggedIn then
     windowBlock(items, "5h window", s.fiveHour)
     windowBlock(items, "1w window", s.weekly)
@@ -474,7 +480,6 @@ local function accountMenu(acct)
       M.applyAllTitles()
     end
   end })
-  table.insert(items, { title = "Show in menu bar", checked = not acct.hidden, fn = function() M.setHidden(acct, not acct.hidden) end })
   if not acct.cookie then
     table.insert(items, { title = "Remove account", fn = function() M.removeAccount(acct.id) end })
   end
