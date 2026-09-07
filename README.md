@@ -3,7 +3,7 @@
 Your AI subscription limits in the macOS menu bar. One strip, one block per account.
 
 <p align="center">
-  <img src="docs/menubar-accounts.png" alt="menu bar: claude 47·25 · codex 99 · grokbot 47" width="320">
+  <img src="docs/menubar-accounts.png" alt="menu bar: claude 37·14 · codex 100 · grokb 100 · 62° + load graph" width="280">
 </p>
 
 Each block: **% used** (5-hour · weekly, or just weekly) and **time until reset**
@@ -53,6 +53,16 @@ the session, frees menu bar space), remove it. Hide every block and the
 strip shrinks back to `+`.
 
 Ctrl-click or Alt-click the strip for a flat summary of every account.
+
+## CPU load & temperature (optional)
+
+Menu → **CPU load graph** adds a 40-second bar graph (one bar per 2 s, each
+colored by its load); **CPU temperature** adds the CPU reading, e.g. `62°`,
+the same number Hot.app shows (hottest SMC `Tp*` key), colored by system
+thermal pressure like Hot does. Both are off by default and cost nothing while
+off. Temperature needs Apple Silicon and the Xcode command-line tools
+(`xcode-select --install`): a 60-line helper (`sensors.c`) is compiled once on
+first use.
 
 ## Good to know
 

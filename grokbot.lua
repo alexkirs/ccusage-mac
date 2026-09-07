@@ -16,7 +16,7 @@ local session = require(PREFIX .. ".session")
 
 local M = {
   id = "grokbot",
-  label = "grokbot",
+  label = "grokb",
   loginLabel = "cursor.com (Grok Bot)",
   openSettingsLabel = "cursor.com/dashboard/usage",
   openSettingsUrl = "https://cursor.com/dashboard/usage",

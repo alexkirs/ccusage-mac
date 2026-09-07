@@ -2,6 +2,7 @@ local PREFIX = ((...) or "claude_usage"):gsub("%.[^.]+$", "")
 local state = require(PREFIX .. ".state")
 local updater = require(PREFIX .. ".updater")
 local login = require(PREFIX .. ".login")
+local sensors = require(PREFIX .. ".sensors")
 local log = state.logger("menubar")
 local get, set = state.get, state.set
 
@@ -95,16 +96,16 @@ local function fmtClock(epoch)
   return string.format("%d:%02d", h, m)
 end
 
--- Menubar block image: brand glyph (left) + 3px usage bar + two stacked text
--- rows (5h·1w percents on top, reset clock below). The whole block is drawn as
--- one canvas image and set as the item's icon (title left empty) so the data
--- stacks vertically and the block stays ~2x narrower than a single-line title.
--- The brand half adapts to light/dark theme; bars/numbers keep their bucket
--- color since the color carries information.
-local ICON_H = 30   -- tall enough for two ~12px text rows (menu bar ~33px)
-local BRAND_W = 8   -- left column holding the vertical provider label
-local GAP_W   = 0
-local BAR_W   = 5
+-- Menubar block image: provider label across the top with a 2px horizontal
+-- usage bar (5h percent) right under it, then two stacked text rows (5h·1w
+-- percents, reset clock). Drawn as one canvas image set as the item's icon so
+-- the block is exactly as wide as its widest text row. The label adapts to
+-- light/dark theme; bar/numbers keep their bucket color since it carries data.
+local ICON_H  = 33  -- label row + bar + two 11px text rows (menu bar is 34px)
+local LABEL_H = 9   -- top row holding the provider label
+local BAR_H   = 2   -- horizontal usage bar under the label
+local LABEL_SIZE = 8
+local LABEL_CW   = 4.8  -- Menlo-Bold 8 advance per glyph
 
 -- Returns true on dark mode. Re-checked on every render so theme toggles
 -- show within one titleTimer tick (60s) without explicit appearance hooks.
@@ -112,53 +113,27 @@ local function isDarkMode()
   return hs.host.interfaceStyle and hs.host.interfaceStyle() == "Dark"
 end
 
--- Provider brand drawn as a vertical (90°-rotated) lowercase label in the left
--- column instead of a glyph. Light-gray, theme-adaptive so it reads on both
--- light and dark menu bar backgrounds. Reads bottom-to-top.
-local LABEL_SIZE = 7
-
-local function drawVerticalLabel(canvas, label)
-  local text = (label or "?"):sub(1, 7)  -- ~7 glyphs fit the 30px column
+-- Label (lowercase, bold 7px, theme gray) + bar (faint track, fill from the
+-- left) spanning the block width w.
+local function drawHeader(canvas, label, w, fillW, hex)
   local color = isDarkMode() and "#D1D5DB" or "#6B7280"  -- gray-300 / gray-500
-  local cw = LABEL_SIZE * 0.602  -- Menlo monospace advance
-  local wordW = math.ceil(utf8.len(text) * cw) + 2
-  local lineH = LABEL_SIZE + 3
-  local cx, cy = BRAND_W / 2, ICON_H / 2
   canvas:appendElements({
-    type = "text",
-    text = text,
-    frame = { x = cx - wordW / 2, y = cy - lineH / 2, w = wordW, h = lineH },
-    textColor = { hex = color, alpha = 1 },
-    textSize = LABEL_SIZE,
-    textFont = "Menlo-Bold",
-    textAlignment = "center",
-    transformation = hs.canvas.matrix.translate(cx, cy):rotate(-90):translate(-cx, -cy),
+    type = "text", text = (label or "?"):sub(1, 7),
+    frame = { x = 0, y = -1, w = w + 6, h = LABEL_H + 3 },
+    textColor = { hex = color, alpha = 1 }, textSize = LABEL_SIZE, textFont = "Menlo-Bold",
   })
-end
-
--- Draws a 3px usage bar (faint track + bottom-anchored fill) inside a
--- BAR_W-wide slot whose left edge is slotX.
-local function drawBar(canvas, slotX, fillH, hex)
-  canvas:appendElements({
-    type = "rectangle",
-    frame = { x = slotX + 1, y = 0, w = 3, h = ICON_H },
-    fillColor = { white = 0.5, alpha = 0.18 },
-    strokeWidth = 0,
-  })
-  if fillH > 0 then
-    canvas:appendElements({
-      type = "rectangle",
-      frame = { x = slotX + 1, y = ICON_H - fillH, w = 3, h = fillH },
-      fillColor = { hex = hex, alpha = 1 },
-      strokeWidth = 0,
-    })
+  canvas:appendElements({ type = "rectangle", frame = { x = 0, y = LABEL_H, w = w, h = BAR_H },
+    fillColor = { white = 0.5, alpha = 0.18 }, strokeWidth = 0 })
+  if fillW > 0 then
+    canvas:appendElements({ type = "rectangle", frame = { x = 0, y = LABEL_H, w = fillW, h = BAR_H },
+      fillColor = { hex = hex, alpha = 1 }, strokeWidth = 0 })
   end
 end
 
 local ROW_FONT = "Menlo"
 local ROW_SIZE = 12
 local CHAR_W   = ROW_SIZE * 0.602  -- Menlo is monospace; calibrated advance per glyph
-local ROW_H    = ROW_SIZE + 2      -- per-row line box (size 12 → ~14px)
+local ROW_H    = 11                -- row pitch: digits have no descenders, line boxes may overlap
 
 -- One colored styledtext run in the block font.
 local function seg(text, hex)
@@ -168,11 +143,18 @@ local function seg(text, hex)
   })
 end
 
--- "23·7" — 5h·1w percents, each in its bucket color, neutral separator.
-local function pctRow(fh, w)
-  return seg(tostring(fh), colorForUsed(fh))
-      .. seg("·", NEUTRAL_COLOR)
-      .. seg(tostring(w), colorForUsed(w))
+local DOT_W = 4  -- "23·7": the separator is a 1.5px dot in a 4px slot, not a 7px glyph
+
+-- 5h·1w percents, each in its bucket color, tiny neutral dot between them.
+-- Draws directly (two text runs + a circle) so the numbers sit close.
+local function drawPctRow(canvas, x, y, fh, w)
+  local leftW = utf8.len(tostring(fh)) * CHAR_W
+  canvas:appendElements({ type = "text", text = seg(tostring(fh), colorForUsed(fh)),
+    frame = { x = x, y = y, w = leftW + 2, h = 15 } })
+  canvas:appendElements({ type = "circle", action = "fill", radius = 0.9, fillColor = { hex = NEUTRAL_COLOR },
+    center = { x = x + leftW + DOT_W / 2, y = y + 8.5 } })
+  canvas:appendElements({ type = "text", text = seg(tostring(w), colorForUsed(w)),
+    frame = { x = x + leftW + DOT_W, y = y, w = 40, h = 15 } })
 end
 
 -- Builds one menubar block image from b = { label, w5h, w1w, showReset, text }.
@@ -184,8 +166,8 @@ local function buildBlockIcon(b)
   local single = (not w5h) ~= (not w1w)
   local fh = single and (w5h or w1w).percentUsed or (w5h and w5h.percentUsed or "?")
   local w  = w1w and w1w.percentUsed or "?"
-  local row1str = single and tostring(fh) or (tostring(fh) .. "·" .. tostring(w))
-  local row1 = single and seg(tostring(fh), colorForUsed(fh)) or pctRow(fh, w)
+  local row1str = single and tostring(fh) or (tostring(fh) .. tostring(w))
+  local row1 = single and seg(tostring(fh), colorForUsed(fh)) or nil  -- nil → drawPctRow
   if b.text then
     fh, row1str = "?", b.text
     row1 = seg(b.text, b.text == "…" and NEUTRAL_COLOR or BUCKET_COLOR.danger)
@@ -197,39 +179,40 @@ local function buildBlockIcon(b)
     row2 = seg(row2str, NEUTRAL_COLOR)
   end
 
-  -- Monospace → width from glyph count (utf8: "·" is multi-byte).
-  local chars = utf8.len(row1str)
-  if row2str then chars = math.max(chars, utf8.len(row2str)) end
-  local textX = BRAND_W + GAP_W + BAR_W + 2
-  local textW = math.ceil(chars * CHAR_W) + (b.text and 8 or 2)  -- fallback-font glyphs run wider
+  -- Monospace → width from glyph count; the pct row adds its dot slot.
+  local row1W = utf8.len(row1str) * CHAR_W + (row1 and 0 or DOT_W)
+  local textW = math.ceil(row2str and math.max(row1W, utf8.len(row2str) * CHAR_W) or row1W)
+    + (b.text and 8 or 1)  -- fallback-font glyphs run wider
+  -- Never narrower than the label; rename the account to a shorter label to
+  -- get a narrower block.
+  textW = math.max(textW, math.ceil(utf8.len((b.label or "?"):sub(1, 7)) * LABEL_CW))
 
-  local canvas = hs.canvas.new({ x = 0, y = 0, w = textX + textW, h = ICON_H })
+  local canvas = hs.canvas.new({ x = 0, y = 0, w = textW, h = ICON_H })
+  local fillW = (type(fh) == "number")
+    and math.floor(math.max(0, math.min(100, fh)) * textW / 100 + 0.5) or 0
+  drawHeader(canvas, b.label, textW, fillW, colorForUsed(fh))
 
-  -- Vertical provider label + bar (bar driven by the 5h percent).
-  drawVerticalLabel(canvas, b.label)
-  local fillH = (type(fh) == "number")
-    and math.floor(math.max(0, math.min(100, fh)) * ICON_H / 100 + 0.5) or 0
-  drawBar(canvas, BRAND_W + GAP_W, fillH, colorForUsed(fh))
-
-  -- Text rows: two stacked when reset shown, else one vertically centered.
-  if row2 then
-    local top = math.floor((ICON_H - ROW_H * 2) / 2)
-    canvas:appendElements({ type = "text", text = row1, frame = { x = textX, y = top,         w = textW, h = ROW_H + 2 } })
-    canvas:appendElements({ type = "text", text = row2, frame = { x = textX, y = top + ROW_H, w = textW, h = ROW_H + 2 } })
+  -- Text rows under the header: two stacked when reset shown, else one centered.
+  local top = LABEL_H + BAR_H - 1  -- text frame has ~2px of internal leading
+  local y1 = row2 and top or top + math.floor(ROW_H / 2)
+  if row1 then
+    canvas:appendElements({ type = "text", text = row1, frame = { x = 0, y = y1, w = textW + 2, h = 15 } })
   else
-    local top = math.floor((ICON_H - ROW_H) / 2)
-    canvas:appendElements({ type = "text", text = row1, frame = { x = textX, y = top, w = textW, h = ROW_H + 2 } })
+    drawPctRow(canvas, 0, y1, fh, w)
+  end
+  if row2 then
+    canvas:appendElements({ type = "text", text = row2, frame = { x = 0, y = top + ROW_H, w = textW + 2, h = 15 } })
   end
 
   local img = canvas:imageFromCanvas()
   canvas:delete()
-  return img, textX + textW
+  return img, textW
 end
 
 -- Composites all blocks side-by-side into one image: one menubar item for
 -- every account, so macOS pads the whole strip once (~17px) instead of per
 -- account. Returns an hs.image.
-local BLOCK_GAP = 7
+local BLOCK_GAP = 3
 local function buildComboIcon(blocks)
   local imgs, widths, total = {}, {}, 0
   for i, b in ipairs(blocks) do
@@ -246,7 +229,7 @@ local function buildComboIcon(blocks)
   end
   local out = canvas:imageFromCanvas()
   canvas:delete()
-  return out
+  return out, total
 end
 
 -- Finds the Codex "Spark" per-model entry in additional[] (label matched
@@ -622,6 +605,10 @@ function M.buildMenu(compact)
     })
   end
   table.insert(items, { title = "Display format", menu = fmtItems })
+  table.insert(items, { title = "CPU load graph", checked = sensors.graphOn(),
+    fn = function() sensors.toggleGraph(); M.redraw() end })
+  table.insert(items, { title = "CPU temperature", checked = sensors.tempOn(),
+    fn = function() sensors.toggleTemp(); M.redraw() end })
 
   local us = updater.status()
   if us.behind and us.behind > 0 then
@@ -656,6 +643,8 @@ function M.ensureBar()
   M.bar:setTitle("+")
   M.bar:setMenu(function(mods) return M.buildMenu(mods and (mods.ctrl or mods.alt)) end)
   M.titleTimer = hs.timer.doEvery(60, M.applyAllTitles)  -- reset clocks tick
+  sensors.onTick = M.redraw
+  sensors.sync()
   if not M._updaterStarted then
     updater.start()
     M._updaterStarted = true
@@ -663,6 +652,9 @@ function M.ensureBar()
 end
 
 -- Redraws the strip: every visible account's blocks, in registry order.
+-- The accounts image is cached so the 5 s sensor tick (M.redraw) only
+-- re-composites, never re-renders the account blocks.
+local acctImg, acctW
 function M.applyAllTitles()
   if not M.bar then return end
   local blocks = {}
@@ -670,11 +662,27 @@ function M.applyAllTitles()
     local inst = M.instances[a.id]
     if inst then for _, b in ipairs(inst.blocks()) do blocks[#blocks + 1] = b end end
   end
-  if #blocks == 0 then  -- no accounts (or all hidden): bare "+" opens the menu
+  acctImg, acctW = nil, 0
+  if #blocks > 0 then acctImg, acctW = buildComboIcon(blocks) end
+  M.redraw()
+end
+
+function M.redraw()
+  if not M.bar then return end
+  local w = acctW + (acctImg and (sensors.graphOn() or sensors.tempOn()) and BLOCK_GAP or 0)
+  local canvas = hs.canvas.new({ x = 0, y = 0, w = w + 64, h = ICON_H })
+  if acctImg then
+    canvas:appendElements({ type = "image", image = acctImg, frame = { x = 0, y = 0, w = acctW, h = ICON_H } })
+  end
+  w = w + sensors.draw(canvas, w, ICON_H, isDarkMode())
+  if w == 0 then  -- nothing to show: bare "+" opens the menu
+    canvas:delete()
     M.bar:setIcon(nil, false); M.bar:setTitle("+")
     return
   end
-  M.bar:setIcon(buildComboIcon(blocks), false)
+  canvas:size({ w = w, h = ICON_H })
+  M.bar:setIcon(canvas:imageFromCanvas(), false)
+  canvas:delete()
   M.bar:setTitle("")
 end
 
@@ -746,6 +754,7 @@ function M.stopAll()
   for _, inst in pairs(M.instances) do inst.stop() end
   M.instances = {}
   if M.titleTimer then M.titleTimer:stop(); M.titleTimer = nil end
+  sensors.stop()
   if M.bar then M.bar:delete(); M.bar = nil end
   if M._updaterStarted then
     updater.stop()
