@@ -65,6 +65,9 @@ local function textColor()
   return isDarkMode() and "#D1D5DB" or "#6B7280"
 end
 
+-- Limit-reset credits count (Codex): gold, bottom-right of the block.
+local function resetsColor() return isDarkMode() and "#FACC15" or "#CA8A04" end  -- yellow-400 / yellow-600
+
 -- Below 50% the number is plain text: only amber/orange/red carry a signal.
 local function colorForUsed(pctUsed)
   local b = bucketFor(pctUsed)
@@ -169,8 +172,9 @@ local function drawPctRow(canvas, x, y, fh, w)
     frame = { x = x + leftW + DOT_W, y = y, w = 40, h = 15 } })
 end
 
--- Builds one menubar block image from b = { label, w5h, w1w, showReset, text }.
+-- Builds one menubar block image from b = { label, tag, w5h, w1w, showReset, text, resets }.
 -- b.text (e.g. "⚠", "…") replaces the numbers when the account has no data.
+-- b.resets > 0 draws the count in gold at the bottom-right.
 local function buildBlockIcon(b)
   local w5h, w1w = b.w5h, b.w1w
   -- Weekly-only providers (Codex since 2026-07 has no 5h window): render a
@@ -199,6 +203,10 @@ local function buildBlockIcon(b)
   -- get a narrower block.
   textW = math.max(textW, math.ceil((utf8.len((b.label or "?"):sub(1, 7))
     + (b.tag and utf8.len(b.tag) or 0)) * LABEL_CW))
+  local resets = (b.resets or 0) > 0 and tostring(b.resets) or nil
+  if resets and row2str then  -- shares the bottom row with the reset clock
+    textW = math.max(textW, math.ceil(utf8.len(row2str) * CHAR_W + 3 + #resets * LABEL_CW))
+  end
 
   local canvas = hs.canvas.new({ x = 0, y = 0, w = textW, h = ICON_H })
   local fillW = (type(fh) == "number")
@@ -215,6 +223,11 @@ local function buildBlockIcon(b)
   end
   if row2 then
     canvas:appendElements({ type = "text", text = row2, frame = { x = 0, y = top + ROW_H, w = textW + 2, h = 15 } })
+  end
+  if resets then
+    canvas:appendElements({ type = "text", text = resets, textAlignment = "right",
+      frame = { x = 0, y = ICON_H - LABEL_H - 1, w = textW, h = LABEL_H + 3 },
+      textColor = { hex = resetsColor(), alpha = 1 }, textSize = LABEL_SIZE, textFont = "Menlo-Bold" })
   end
 
   local img = canvas:imageFromCanvas()
@@ -409,6 +422,7 @@ local function accountMenu(acct)
     windowBlock(items, "5h window", s.fiveHour)
     windowBlock(items, "1w window", s.weekly)
     if s.weeklySonnet then windowBlock(items, "1w · Sonnet only", s.weeklySonnet) end
+    if s.resets then table.insert(items, { title = "Limit resets available: " .. s.resets, disabled = true }) end
 
     local hasAdditional = s.additional and #s.additional > 0
     local showSpark = get("spark_bar", false) == true
@@ -744,7 +758,7 @@ function M.start(acct)
       return { { label = label, tag = tag, text = s.status == "init" and "…" or "⚠" } }
     end
     local showReset = get("format", DEFAULT_FORMAT) == "compact_reset"
-    local blocks = { { label = label, tag = tag, w5h = s.fiveHour, w1w = s.weekly, showReset = showReset } }
+    local blocks = { { label = label, tag = tag, w5h = s.fiveHour, w1w = s.weekly, showReset = showReset, resets = s.resets } }
     if provider.id == "codex" and get("spark_bar", false) then
       local a = sparkEntry(s)
       if a and (a.fiveHour or a.weekly) then

@@ -131,8 +131,10 @@ local function mapResponse(u)
       additional[#additional + 1] = { label = arl.limit_name or "additional", fiveHour = afh, weekly = awk }
     end
   end
+  local rc = u.rate_limit_reset_credits
   return {
     status = "ok", fiveHour = fiveHour, weekly = weekly, additional = additional,
+    resets = type(rc) == "table" and tonumber(rc.available_count) or nil,  -- limit-reset credits on hand
     account = { email = u.email, orgName = u.plan_type and ("Plan: " .. u.plan_type) or nil },
     warnings = {}, raw = { usage = u },
   }

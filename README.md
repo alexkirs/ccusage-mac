@@ -25,6 +25,8 @@ Codex accounts sign in through the [Codex CLI](https://github.com/openai/codex)
 (`codex login --device-auth`), so the `codex` command must be installed. Each
 account gets its own isolated login, independent of whatever your terminal
 `codex` is logged into, so several Codex accounts show side by side.
+Limit-reset credits, when the plan has any, show as a gold count in the
+block's bottom-right corner.
 
 ## Install
 
