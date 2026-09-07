@@ -48,7 +48,7 @@ function M.openWindow(provider, spec, onDone)
 
   loginWV:windowStyle({ "titled", "closable", "resizable", "miniaturizable" })
   loginWV:allowTextEntry(true)
-  loginWV:windowTitle(spec.title)
+  loginWV:windowTitle("⚠  CLOSES AUTOMATICALLY WHEN LOGIN FINISHES — DO NOT CLOSE")
   loginWV:allowNewWindows(true)
   setNormalWindowLevel(loginWV)
   setUA(loginWV)
@@ -57,11 +57,29 @@ function M.openWindow(provider, spec, onDone)
   local oauthPopup = nil
   local urlTick, probeWV = nil, nil
 
+  -- Red caps banner across the top of the window; the OS title bar can't be
+  -- colored, so this carries the "don't close it" message. Repositioned on
+  -- each urlTick so it tracks the window if moved.
+  local banner = hs.canvas.new({ x = 0, y = 0, w = 820, h = 26 })
+  banner:appendElements(
+    { type = "rectangle", action = "fill", fillColor = { hex = "#DC2626" } },
+    { type = "text", text = "CLOSES AUTOMATICALLY WHEN LOGIN FINISHES — DO NOT CLOSE THIS WINDOW",
+      textColor = { white = 1 }, textSize = 12, textFont = "Menlo-Bold", textAlignment = "center",
+      frame = { x = 0, y = 5, w = "100%", h = 20 } })
+  banner:level(hs.canvas.windowLevels.floating)
+  local TITLEBAR = 28  -- keep the traffic-light buttons clickable above the banner
+  local function placeBanner()
+    if not loginWV then return end
+    local ok, f = pcall(function() return loginWV:frame() end)
+    if ok and f then banner:frame({ x = f.x, y = f.y + TITLEBAR, w = f.w, h = 26 }):show() end
+  end
+
   local function finish(reason)
     if done then return end
     done = true
     loginLog("closing (%s)", reason)
     if urlTick then urlTick:stop(); urlTick = nil end
+    if banner then pcall(function() banner:delete() end); banner = nil end
     if loginWV then pcall(function() loginWV:delete() end); loginWV = nil end
     M.providerId = nil
     if oauthPopup then pcall(function() oauthPopup:delete() end); oauthPopup = nil end
@@ -156,15 +174,18 @@ function M.openWindow(provider, spec, onDone)
   urlTick = hs.timer.doEvery(1, function()
     if done or not loginWV then return end
     tickCount = tickCount + 1
+    placeBanner()
     local u = loginWV:url() or "?"
     if u ~= lastTickURL then loginLog("tick url=%s", u); lastTickURL = u end
     if spec.isAuthedUrl(u) then finish("tick authed url: " .. u); return end
     if tickCount >= 3 and (tickCount % 5) == 0 then runProbe() end
-    -- Fallback detector: the session cookie shows up in the on-disk jar.
-    -- Only after 20 s, so the pre-login wipe has reached the file first.
-    -- Providers with a probe don't use it: the jar is shared with hs.http, so
-    -- another account's rotated token would pass for a login.
-    if not spec.probeUrl and tickCount >= 20 and (tickCount % 5) == 0
+    -- Fallback detector: the session cookie shows up in the on-disk jar. The
+    -- probe fails to load on some providers (chatgpt.com), so this is the one
+    -- that actually closes the window there. Safe against picking up another
+    -- account's rotated token because same-provider refresh is paused while
+    -- this window is open (see menubar instance.refresh) and the pre-login
+    -- wipe cleared the jar first — hence the 20 s delay.
+    if tickCount >= 20 and (tickCount % 3) == 0
        and session.pick(session.readJar(), provider.domain, provider.cookiePrefix) then
       finish("cookie landed in jar")
     end
@@ -172,6 +193,7 @@ function M.openWindow(provider, spec, onDone)
 
   loginWV:url(spec.startUrl)
   loginWV:show()
+  placeBanner()
   pcall(function()
     local w = loginWV:hswindow()
     if w then w:focus() end
