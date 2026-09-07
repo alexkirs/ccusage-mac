@@ -37,7 +37,7 @@ Any number of accounts per service. Refreshes every 60 s.
 
 3. Open **Hammerspoon** from Applications. Allow Accessibility when it asks.
 
-4. A `⚠ login` item appears in the menu bar. Click it → **Log in to claude.ai…** → sign in → close the window.
+4. A `claude ⚠` block appears in the menu bar. Click it → **claude · claude.ai** → **Log in to claude.ai…** → sign in → close the window.
 
 5. So it survives a reboot: click the Hammerspoon hammer icon in the menu bar → **Preferences…** → tick **Launch Hammerspoon at login**.
 
@@ -52,7 +52,7 @@ session, frees menu bar space), remove it.
 
 ## Good to know
 
-- Sessions expire when the site says so (Claude ~30 days, others longer). The block turns into `⚠ login`; click it and sign in again.
+- Sessions expire when the site says so (Claude ~30 days, others longer). The block turns into `⚠`; open its submenu and sign in again.
 - Sign-in happens in a normal browser window inside Hammerspoon. Your Safari/Chrome logins are not touched.
 - The widget updates itself from this repo daily (menu → **Updates** to turn that off).
 
