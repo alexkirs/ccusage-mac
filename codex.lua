@@ -26,6 +26,9 @@ local M = {
   hasExtraUsage = false,
   domain = "chatgpt.com",
   cookiePrefix = "__Secure-next-auth.session-token",
+  -- auth.openai.com keeps its own session; left alone, a second login just
+  -- pre-fills the first account's email.
+  wipeDomains = { "chatgpt.com", "auth.openai.com", "openai.com" },
 }
 
 M.login = {

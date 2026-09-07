@@ -716,6 +716,9 @@ function M.start(acct)
   end
 
   function instance.refresh()
+    -- A login for this provider is in progress: our Set-Cookie rotation would
+    -- land in the shared jar and be harvested as the new account's session.
+    if login.providerId == acct.provider then log.d(acct.id .. " refresh skipped: login open"); return end
     log.d(acct.id .. " refresh")
     local t0 = hs.timer.secondsSinceEpoch()
     provider.fetch(acct, function(parsed)

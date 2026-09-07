@@ -11,6 +11,7 @@ local log = state.logger("login")
 
 local M = {}
 local loginWV = nil
+M.providerId = nil  -- provider being logged into while the window is open
 
 local function loginLog(fmt, ...)
   local line = "[login] " .. string.format(fmt, ...)
@@ -25,6 +26,7 @@ local function setNormalWindowLevel(wv) pcall(function() wv:level(hs.drawing.win
 -- onDone(cookieHeader|nil, expires, domainCookies)
 function M.open(provider, onDone)
   if loginWV then loginWV:show():bringToFront(); return end
+  M.providerId = provider.id
   local spec = provider.login
   local domains = provider.wipeDomains or { provider.domain }
   loginLog("wipe %s then open", table.concat(domains, ","))
@@ -61,6 +63,7 @@ function M.openWindow(provider, spec, onDone)
     loginLog("closing (%s)", reason)
     if urlTick then urlTick:stop(); urlTick = nil end
     if loginWV then pcall(function() loginWV:delete() end); loginWV = nil end
+    M.providerId = nil
     if oauthPopup then pcall(function() oauthPopup:delete() end); oauthPopup = nil end
     if probeWV then pcall(function() probeWV:delete() end); probeWV = nil end
     -- The login window had focus; with no visible window left macOS falls
@@ -159,7 +162,9 @@ function M.openWindow(provider, spec, onDone)
     if tickCount >= 3 and (tickCount % 5) == 0 then runProbe() end
     -- Fallback detector: the session cookie shows up in the on-disk jar.
     -- Only after 20 s, so the pre-login wipe has reached the file first.
-    if tickCount >= 20 and (tickCount % 5) == 0
+    -- Providers with a probe don't use it: the jar is shared with hs.http, so
+    -- another account's rotated token would pass for a login.
+    if not spec.probeUrl and tickCount >= 20 and (tickCount % 5) == 0
        and session.pick(session.readJar(), provider.domain, provider.cookiePrefix) then
       finish("cookie landed in jar")
     end
