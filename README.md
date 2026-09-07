@@ -3,7 +3,7 @@
 Your AI subscription limits in the macOS menu bar. One strip, one block per account.
 
 <p align="center">
-  <img src="docs/menubar-accounts.png" alt="menu bar: claude · grokb · two codex accounts · 62° + load graph" width="300">
+  <img src="docs/menubar-accounts.png" alt="menu bar: claude · grokb · two codex accounts (one tagged cod2) · 52° + load graph" width="300">
 </p>
 
 Each block: **% used** (5-hour · weekly, or just weekly) and **time until reset**
@@ -54,7 +54,7 @@ That's it. Numbers show up within a minute.
 Same thing again: **Add account** → pick a service → sign in.
 Each account gets its own block in the strip and its own submenu: usage
 detail, log out, rename the label (up to 7 letters), tag it (1–2 violet
-chars top-right of the block, to tell `codex 1` from `codex 2`), hide the block (keeps
+chars glued to the label, to tell `codex1` from `codex2`), hide the block (keeps
 the session, frees menu bar space), remove it. Hide every block and the
 strip shrinks back to `+`.
 

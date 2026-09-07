@@ -120,18 +120,12 @@ end
 -- left) spanning the block width w.
 local function drawHeader(canvas, label, w, fillW, hex, tag)
   local color = isDarkMode() and "#D1D5DB" or "#6B7280"  -- gray-300 / gray-500
-  canvas:appendElements({
-    type = "text", text = (label or "?"):sub(1, 7),
-    frame = { x = 0, y = -1, w = w + 6, h = LABEL_H + 3 },
-    textColor = { hex = color, alpha = 1 }, textSize = LABEL_SIZE, textFont = "Menlo-Bold",
-  })
-  if tag then  -- account tag, right-aligned in the label row
-    canvas:appendElements({
-      type = "text", text = tag, textAlignment = "right",
-      frame = { x = 0, y = -1, w = w, h = LABEL_H + 3 },
-      textColor = { hex = TAG_COLOR, alpha = 1 }, textSize = LABEL_SIZE, textFont = "Menlo-Bold",
-    })
-  end
+  local font = { name = "Menlo-Bold", size = LABEL_SIZE }
+  -- Label and tag are one text run, so the tag sits flush against the label
+  -- (no gap; put a space in either if you want one).
+  local text = hs.styledtext.new((label or "?"):sub(1, 7), { color = { hex = color, alpha = 1 }, font = font })
+  if tag then text = text .. hs.styledtext.new(tag, { color = { hex = TAG_COLOR, alpha = 1 }, font = font }) end
+  canvas:appendElements({ type = "text", text = text, frame = { x = 0, y = -1, w = w + 6, h = LABEL_H + 3 } })
   canvas:appendElements({ type = "rectangle", frame = { x = 0, y = LABEL_H, w = w, h = BAR_H },
     fillColor = { white = 0.5, alpha = 0.18 }, strokeWidth = 0 })
   if fillW > 0 then
@@ -196,7 +190,7 @@ local function buildBlockIcon(b)
   -- Never narrower than the label; rename the account to a shorter label to
   -- get a narrower block.
   textW = math.max(textW, math.ceil((utf8.len((b.label or "?"):sub(1, 7))
-    + (b.tag and utf8.len(b.tag) + 0.5 or 0)) * LABEL_CW))
+    + (b.tag and utf8.len(b.tag) or 0)) * LABEL_CW))
 
   local canvas = hs.canvas.new({ x = 0, y = 0, w = textW, h = ICON_H })
   local fillW = (type(fh) == "number")
@@ -503,9 +497,8 @@ local function accountMenu(acct)
     end
   end })
   table.insert(items, { title = "Tag…", fn = function()
-    local btn, text = hs.dialog.textPrompt("Account tag", "1–2 chars drawn top-right of the block, in violet. Empty clears:", acct.tag or "", "OK", "Cancel")
+    local btn, text = hs.dialog.textPrompt("Account tag", "1–2 chars drawn in violet right after the label (no gap; add a space if you want one). Empty clears:", acct.tag or "", "OK", "Cancel")
     if btn == "OK" then
-      text = text:gsub("^%s+", ""):gsub("%s+$", "")
       local cut = utf8.offset(text, 3)  -- keep the first two glyphs
       if cut then text = text:sub(1, cut - 1) end
       acct.tag = text ~= "" and text or nil
