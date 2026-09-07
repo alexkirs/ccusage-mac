@@ -41,6 +41,9 @@ local BUCKET_COLOR = {
   danger  = "#EF4444",   -- red-500
 }
 local NEUTRAL_COLOR = "#9CA3AF"  -- gray-400, for separators like "/" and reset text
+-- Account tag ("2", "w"): violet-500 — distinct from the usage traffic-light
+-- colors above (nothing to do with load), readable on light and dark bars.
+local TAG_COLOR = "#8B5CF6"
 
 local function bucketFor(pctUsed)
   if type(pctUsed) ~= "number" then return nil end
@@ -115,13 +118,20 @@ end
 
 -- Label (lowercase, bold 7px, theme gray) + bar (faint track, fill from the
 -- left) spanning the block width w.
-local function drawHeader(canvas, label, w, fillW, hex)
+local function drawHeader(canvas, label, w, fillW, hex, tag)
   local color = isDarkMode() and "#D1D5DB" or "#6B7280"  -- gray-300 / gray-500
   canvas:appendElements({
     type = "text", text = (label or "?"):sub(1, 7),
     frame = { x = 0, y = -1, w = w + 6, h = LABEL_H + 3 },
     textColor = { hex = color, alpha = 1 }, textSize = LABEL_SIZE, textFont = "Menlo-Bold",
   })
+  if tag then  -- account tag, right-aligned in the label row
+    canvas:appendElements({
+      type = "text", text = tag, textAlignment = "right",
+      frame = { x = 0, y = -1, w = w, h = LABEL_H + 3 },
+      textColor = { hex = TAG_COLOR, alpha = 1 }, textSize = LABEL_SIZE, textFont = "Menlo-Bold",
+    })
+  end
   canvas:appendElements({ type = "rectangle", frame = { x = 0, y = LABEL_H, w = w, h = BAR_H },
     fillColor = { white = 0.5, alpha = 0.18 }, strokeWidth = 0 })
   if fillW > 0 then
@@ -185,12 +195,13 @@ local function buildBlockIcon(b)
     + (b.text and 8 or 1)  -- fallback-font glyphs run wider
   -- Never narrower than the label; rename the account to a shorter label to
   -- get a narrower block.
-  textW = math.max(textW, math.ceil(utf8.len((b.label or "?"):sub(1, 7)) * LABEL_CW))
+  textW = math.max(textW, math.ceil((utf8.len((b.label or "?"):sub(1, 7))
+    + (b.tag and utf8.len(b.tag) + 0.5 or 0)) * LABEL_CW))
 
   local canvas = hs.canvas.new({ x = 0, y = 0, w = textW, h = ICON_H })
   local fillW = (type(fh) == "number")
     and math.floor(math.max(0, math.min(100, fh)) * textW / 100 + 0.5) or 0
-  drawHeader(canvas, b.label, textW, fillW, colorForUsed(fh))
+  drawHeader(canvas, b.label, textW, fillW, colorForUsed(fh), b.tag)
 
   -- Text rows under the header: two stacked when reset shown, else one centered.
   local top = LABEL_H + BAR_H - 1  -- text frame has ~2px of internal leading
@@ -368,7 +379,7 @@ local function accountTitle(acct)
   local inst = M.instances[acct.id]
   local s = inst and inst.s or {}
   local who = s.account and s.account.email or provider.loginLabel
-  local t = (acct.label or provider.label) .. "  ·  " .. who
+  local t = (acct.label or provider.label) .. (acct.tag and (" " .. acct.tag) or "") .. "  ·  " .. who
   if acct.hidden then t = t .. "  ·  hidden"
   elseif s.status == "needs_login" then t = t .. "  ·  ⚠ login"
   elseif s.status == "error" then t = t .. "  ·  ⚠ error"
@@ -487,6 +498,17 @@ local function accountMenu(acct)
     local btn, text = hs.dialog.textPrompt("Account label", "Short label shown on the block (up to 7 chars):", acct.label or "", "OK", "Cancel")
     if btn == "OK" then
       acct.label = text ~= "" and text or nil
+      M.save()
+      M.applyAllTitles()
+    end
+  end })
+  table.insert(items, { title = "Tag…", fn = function()
+    local btn, text = hs.dialog.textPrompt("Account tag", "1–2 chars drawn top-right of the block, in violet. Empty clears:", acct.tag or "", "OK", "Cancel")
+    if btn == "OK" then
+      text = text:gsub("^%s+", ""):gsub("%s+$", "")
+      local cut = utf8.offset(text, 3)  -- keep the first two glyphs
+      if cut then text = text:sub(1, cut - 1) end
+      acct.tag = text ~= "" and text or nil
       M.save()
       M.applyAllTitles()
     end
@@ -716,16 +738,16 @@ function M.start(acct)
   -- adds a second block for the per-model limit.
   function instance.blocks()
     local s = instance.s
-    local label = acct.label or provider.label
+    local label, tag = acct.label or provider.label, acct.tag
     if s.status ~= "ok" or not (s.fiveHour or s.weekly) then
-      return { { label = label, text = s.status == "init" and "…" or "⚠" } }
+      return { { label = label, tag = tag, text = s.status == "init" and "…" or "⚠" } }
     end
     local showReset = get("format", DEFAULT_FORMAT) == "compact_reset"
-    local blocks = { { label = label, w5h = s.fiveHour, w1w = s.weekly, showReset = showReset } }
+    local blocks = { { label = label, tag = tag, w5h = s.fiveHour, w1w = s.weekly, showReset = showReset } }
     if provider.id == "codex" and get("spark_bar", false) then
       local a = sparkEntry(s)
       if a and (a.fiveHour or a.weekly) then
-        blocks[#blocks + 1] = { label = "spark", w5h = a.fiveHour, w1w = a.weekly, showReset = showReset }
+        blocks[#blocks + 1] = { label = "spark", tag = tag, w5h = a.fiveHour, w1w = a.weekly, showReset = showReset }
       end
     end
     return blocks

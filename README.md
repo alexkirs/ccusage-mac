@@ -53,7 +53,8 @@ That's it. Numbers show up within a minute.
 
 Same thing again: **Add account** → pick a service → sign in.
 Each account gets its own block in the strip and its own submenu: usage
-detail, log out, rename the label (up to 7 letters), hide the block (keeps
+detail, log out, rename the label (up to 7 letters), tag it (1–2 violet
+chars top-right of the block, to tell `codex 1` from `codex 2`), hide the block (keeps
 the session, frees menu bar space), remove it. Hide every block and the
 strip shrinks back to `+`.
 
