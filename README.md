@@ -14,7 +14,7 @@ Works with:
 
 | Service | What it shows |
 |---|---|
-| **Claude** (claude.ai) | 5h and weekly limits, extra usage on/off |
+| **Claude** (claude.ai) | 5h and weekly limits, per-model weekly caps, extra usage on/off |
 | **Codex** (chatgpt.com) | weekly limit, Spark per-model limit (via Codex CLI login) |
 | **Grok** (grok.com) | SuperGrok weekly pool |
 | **Grok Bot** (cursor.com) | Grok Bot weekly allowance |

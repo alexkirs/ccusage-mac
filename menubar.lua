@@ -435,23 +435,22 @@ local function accountMenu(acct)
   if loggedIn then
     windowBlock(items, "5h window", s.fiveHour)
     windowBlock(items, "1w window", s.weekly)
-    if s.weeklySonnet then windowBlock(items, "1w · Sonnet only", s.weeklySonnet) end
     if s.resets then table.insert(items, { title = "Limit resets available: " .. s.resets, disabled = true }) end
 
     local hasAdditional = s.additional and #s.additional > 0
     local showSpark = get("spark_bar", false) == true
-    if hasAdditional and showSpark then
-      for _, a in ipairs(s.additional) do
-        table.insert(items, { title = "-" })
-        table.insert(items, { title = a.label or "additional", disabled = true })
-        windowBlock(items, "5h window", a.fiveHour)
-        windowBlock(items, "1w window", a.weekly)
-      end
+    -- Per-model limits always listed here; the toggle below only controls the
+    -- extra strip block.
+    for _, a in ipairs(hasAdditional and s.additional or {}) do
+      table.insert(items, { title = "-" })
+      table.insert(items, { title = a.label or "additional", disabled = true })
+      if a.fiveHour then windowBlock(items, "5h window", a.fiveHour) end
+      if a.weekly then windowBlock(items, "1w window", a.weekly) end
     end
-    if hasAdditional then
+    if hasAdditional and provider.id == "codex" then
       table.insert(items, { title = "-" })
       table.insert(items, {
-        title = "Show per-model limits",
+        title = "Show per-model limits in the bar",
         checked = showSpark,
         fn = function() set("spark_bar", not showSpark); M.applyAllTitles() end,
       })

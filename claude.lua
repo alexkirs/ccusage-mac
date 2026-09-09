@@ -3,7 +3,10 @@
 --   GET /api/account
 --       → { email_address, full_name, memberships:[{organization:{uuid,name}}] }
 --   GET /api/organizations/{orgUuid}/usage
---       → { five_hour, seven_day, seven_day_sonnet, seven_day_opus, seven_day_haiku, .. }
+--       → { five_hour, seven_day, limits:[{kind,group,percent,resets_at,scope}], .. }
+--       The fixed seven_day_<model> keys now read null; per-model caps live in
+--       limits[] as entries with a scope.model, so whatever models the account
+--       has (Fable, Opus, ..) are picked up without a code change.
 --   GET /api/organizations/{orgUuid}/overage_spend_limit
 --       → { is_enabled, monthly_credit_limit, used_credits, currency }
 --
@@ -99,6 +102,33 @@ local function mapOverage(raw)
   }
 end
 
+-- Per-model windows out of limits[]: one entry per scoped limit, keyed into
+-- fiveHour/weekly by its group. Falls back to the legacy seven_day_<model>
+-- keys while accounts still report them.
+local function perModel(usage)
+  local out = {}
+  for _, l in ipairs(type(usage.limits) == "table" and usage.limits or {}) do
+    local m = l.scope and l.scope.model
+    if m and type(l.percent) == "number" then
+      local e = { label = m.display_name or m.id or "model" }
+      e[l.group == "session" and "fiveHour" or "weekly"] = {
+        percentUsed = pct(l.percent),
+        percentLeft = math.max(0, 100 - l.percent),
+        resetsAt    = isoToEpoch(l.resets_at),
+      }
+      out[#out + 1] = e
+    end
+  end
+  if #out > 0 then return out end
+  for k, v in pairs(usage) do
+    local name = k:match("^seven_day_(%a+)$")
+    local w = name and makeWindow(v)
+    if w then out[#out + 1] = { label = name:gsub("^%l", string.upper), weekly = w } end
+  end
+  table.sort(out, function(a, b) return a.label < b.label end)
+  return out
+end
+
 local function mapResponse(usage, overage, account)
   if type(usage) ~= "table" then
     return { status = "error", errorMsg = "usage response missing or not an object",
@@ -113,15 +143,15 @@ local function mapResponse(usage, overage, account)
     status       = "ok",
     fiveHour     = five,
     weekly       = weekly,
-    weeklySonnet = makeWindow(usage.seven_day_sonnet),
-    weeklyOpus   = makeWindow(usage.seven_day_opus),
-    weeklyHaiku  = makeWindow(usage.seven_day_haiku),
+    additional   = perModel(usage),
     account      = account,
     extraUsage   = mapOverage(overage),
     warnings     = {},
     raw          = { usage = usage, overage = overage },
   }
 end
+
+M.mapResponse = mapResponse  -- exported for test_session.lua
 
 ---------------------------------------------------------------------
 -- Fetch

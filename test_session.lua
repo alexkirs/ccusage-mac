@@ -55,6 +55,30 @@ local gb = grokbot.mapResponse({ usagePercent = 12.4, nextResetTimestampUtc = "2
 assert(gb.status == "ok" and gb.weekly.percentUsed == 12 and gb.weekly.resetsAt and gb.weekly.resetsAt > 1789000000, hs.inspect(gb))
 assert(grokbot.mapResponse({}).status == "error")
 
+-- claude: per-model weekly caps come out of limits[] (shape captured 2026-09-09),
+-- with the legacy seven_day_<model> keys as fallback.
+local claude = require(name .. ".claude")
+local usage = {
+  five_hour = { utilization = 8.0, resets_at = "2026-09-09T07:39:59Z" },
+  seven_day = { utilization = 50.0, resets_at = "2026-09-14T04:59:59Z" },
+  seven_day_sonnet = nil,
+  limits = {
+    { kind = "session", group = "session", percent = 8 },
+    { kind = "weekly_all", group = "weekly", percent = 50 },
+    { kind = "weekly_scoped", group = "weekly", percent = 28,
+      resets_at = "2026-09-14T04:59:59Z", scope = { model = { display_name = "Fable" } } },
+  },
+}
+local c = claude.mapResponse(usage, nil, {})
+assert(c.status == "ok" and #c.additional == 1, hs.inspect(c.additional))
+assert(c.additional[1].label == "Fable" and c.additional[1].weekly.percentUsed == 28
+       and c.additional[1].weekly.percentLeft == 72 and c.additional[1].fiveHour == nil)
+usage.limits = nil
+usage.seven_day_opus = { utilization = 12.0, resets_at = "2026-09-14T04:59:59Z" }
+local legacy = claude.mapResponse(usage, nil, {})
+assert(#legacy.additional == 1 and legacy.additional[1].label == "Opus"
+       and legacy.additional[1].weekly.percentUsed == 12, hs.inspect(legacy.additional))
+
 -- Real jar parses without throwing (contents not asserted, machine-specific).
 local real = session.readJar()
 assert(type(real) == "table")
