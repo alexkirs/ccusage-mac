@@ -374,6 +374,20 @@ function M.setHidden(acct, hidden)
   M.applyAllTitles()
 end
 
+-- Reorders the registry; the strip and the menu both render in registry order.
+function M.moveAccount(id, delta)
+  for i, a in ipairs(M.accounts) do
+    if a.id == id then
+      local j = i + delta
+      if j < 1 or j > #M.accounts then return end
+      M.accounts[i], M.accounts[j] = M.accounts[j], a
+      M.save()
+      M.applyAllTitles()
+      return
+    end
+  end
+end
+
 ---------------------------------------------------------------------
 -- Menus
 ---------------------------------------------------------------------
@@ -528,6 +542,12 @@ local function accountMenu(acct)
       M.applyAllTitles()
     end
   end })
+  local pos = 0
+  for i, a in ipairs(M.accounts) do if a.id == acct.id then pos = i end end
+  table.insert(items, { title = "Move left", disabled = pos <= 1,
+                        fn = function() M.moveAccount(acct.id, -1) end })
+  table.insert(items, { title = "Move right", disabled = pos >= #M.accounts,
+                        fn = function() M.moveAccount(acct.id, 1) end })
   if not acct.cookie then
     table.insert(items, { title = "Remove account", fn = function() M.removeAccount(acct.id) end })
   end
