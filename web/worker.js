@@ -45,103 +45,102 @@ const PAGE = `<!doctype html><meta charset=utf-8>
 <meta name=theme-color content="#111111">
 <link rel=apple-touch-icon href=/icon-192.png>
 <style>
-:root{--bg:#111;--card:#161616;--fg:#e5e7eb;--dim:#9ca3af;--faint:#6b7280;--line:#262626;--violet:#a78bfa;--gold:#eab308}
+:root{--bg:#111;--card:#171717;--fg:#e5e7eb;--dim:#8b8f96;--faint:#5f636a;--line:#242424;--violet:#a78bfa;--gold:#eab308;--track:#232323}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.35 ui-monospace,Menlo,monospace;padding:14px}
-#wrap{max-width:1000px;margin:0 auto}
-h1{font-size:13px;font-weight:400;color:var(--faint);letter-spacing:.12em;text-transform:uppercase;margin:2px 0 12px}
-#grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
-.top{display:flex;align-items:baseline;gap:8px}
-.name{font-size:20px;font-weight:700}
-.tag{color:var(--violet);font-size:13px;font-weight:700}
-.plan{margin-left:auto;color:var(--dim);font-size:12px;text-align:right}
-.mail{color:var(--faint);font-size:11px;margin-top:1px}
-.win{margin-top:10px}
-.wl{display:flex;align-items:baseline;gap:8px;font-size:12px;color:var(--dim)}
-.wl .pct{margin-left:auto;font-size:15px;font-weight:700}
-.track{height:6px;border-radius:3px;background:#222;margin-top:4px;overflow:hidden}
-.fill{height:100%;border-radius:3px}
-.sect{margin-top:12px;border-top:1px solid var(--line);padding-top:8px}
-.sh{font-size:11px;color:var(--faint);letter-spacing:.1em;text-transform:uppercase}
-.mrow{margin-top:7px}
-.mname{font-size:12px;color:var(--dim)}
-.kv{display:flex;font-size:12px;color:var(--dim);margin-top:5px}
-.kv b{margin-left:auto;color:var(--fg);font-weight:700}
+body{margin:0;background:var(--bg);color:var(--fg);font:13px/1.2 ui-monospace,Menlo,monospace;padding:10px}
+#grid{display:grid;gap:8px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));max-width:1100px;margin:0 auto}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px 10px 7px}
+.hd{display:flex;align-items:baseline;gap:5px;margin-bottom:6px}
+.nm{font-size:15px;font-weight:700;letter-spacing:-.01em}
+.tg{color:var(--violet);font-size:11px;font-weight:700}
+.pl{margin-left:auto;color:var(--faint);font-size:10px}
+.r{display:grid;grid-template-columns:2.4em 1fr 2.1em 2.4em;align-items:center;gap:6px;height:15px}
+.r.s{grid-template-columns:4.6em 1fr 2.1em 2.4em;height:13px;opacity:.9}
+.k{color:var(--dim);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.r.s .k{color:var(--faint);font-size:10px}
+.t{height:7px;background:var(--track);border-radius:2px;overflow:hidden}
+.r.s .t{height:4px}
+.t i{display:block;height:100%;border-radius:2px}
+.v{text-align:right;font-size:13px;font-weight:700;font-variant-numeric:tabular-nums}
+.r.s .v{font-size:11px}
+.z{text-align:right;color:var(--faint);font-size:10px;font-variant-numeric:tabular-nums}
+.sep{height:1px;background:var(--line);margin:5px 0}
+.ft{display:flex;gap:8px;align-items:center;margin-top:6px;font-size:10px;color:var(--faint)}
+.ft b{color:var(--fg);font-weight:700}
 .gold{color:var(--gold)}
-.err{color:#EF4444;font-size:12px;margin-top:8px}
-.stale{opacity:.55}
-#foot{color:var(--faint);font-size:12px;text-align:center;margin-top:14px}
+.err{color:#EF4444;font-size:11px}
+.stale{opacity:.5}
+#foot{max-width:1100px;margin:8px auto 0;color:var(--faint);font-size:10px;text-align:center}
 </style>
-<div id=wrap><h1>limits</h1><div id=grid></div><div id=foot>…</div></div>
+<div id=grid></div><div id=foot></div>
 <script>
 var C = function (u) { return u >= 85 ? '#EF4444' : u >= 70 ? '#F97316' : u >= 50 ? '#F59E0B' : '#10B981'; };
 var esc = function (s) { return String(s).replace(/[&<>"]/g, function (c) { return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]; }); };
+
+// Reset time, shortest form that still reads: 3d / 4h12 / 47m / now.
 var clock = function (e) {
   var d = e - Date.now() / 1000;
   if (d <= 0) return 'now';
   var h = Math.floor(d / 3600), m = Math.floor((d % 3600) / 60);
-  if (h >= 24) return Math.round(h / 24) + 'd';
-  return h ? h + 'h ' + m + 'm' : m + 'm';
+  return h >= 24 ? Math.round(h / 24) + 'd' : h ? h + 'h' + (m < 10 ? '0' : '') + m : m + 'm';
 };
 var ago = function (t) {
   var d = Math.round(Date.now() / 1000 - t);
   return d < 90 ? d + 's' : d < 5400 ? Math.round(d / 60) + 'm' : Math.round(d / 3600) + 'h';
 };
+// "GPT-5.3-Codex-Spark" -> "Spark". Long names cost a column nobody reads.
+var shortName = function (n) { return n.length > 8 ? n.split(/[-\s]/).pop() : n; };
 
-// One window: name on the left, percent on the right, bar under both.
-function win(name, w, big) {
+// label · bar · percent · reset, one line, columns aligned across every card.
+function row(k, w, sub) {
   if (!w || typeof w.percentUsed !== 'number') return '';
-  var u = w.percentUsed;
-  return '<div class=win><div class=wl><span>' + name + '</span>'
-    + (w.resetsAt ? '<span>resets ' + clock(w.resetsAt) + '</span>' : '')
-    + '<span class=pct style="color:' + C(u) + ';font-size:' + (big ? 17 : 14) + 'px">' + u + '%</span></div>'
-    + '<div class=track><div class=fill style="width:' + u + '%;background:' + C(u) + '"></div></div></div>';
+  var u = w.percentUsed, c = C(u);
+  return '<div class="r' + (sub ? ' s' : '') + '"><span class=k>' + esc(k) + '</span>'
+    + '<span class=t><i style="width:' + u + '%;background:' + c + '"></i></span>'
+    + '<span class=v style="color:' + c + '">' + u + '</span>'
+    + '<span class=z>' + (w.resetsAt ? clock(w.resetsAt) : '') + '</span></div>';
 }
 
+// Header right side: the plan, when there is one. "a***@gmail.com's
+// Organization" is the account's own name masked — no information, no room.
+var plan = function (n) {
+  n = String(n || '').replace(/^Plan:\s*/, '').replace(/'s Organization$/, '');
+  return n.indexOf('***') >= 0 ? '' : n;
+};
+
 function card(a) {
-  var s = a.s || {}, ac = s.account || {};
-  var body = '';
+  var s = a.s || {}, ac = s.account || {}, body = '';
   if (s.status !== 'ok') {
     body = '<div class=err>' + esc(s.status === 'needs_login' ? 'needs login' : (s.errorMsg || s.status || 'no data')) + '</div>';
   } else {
-    body = win('5h', s.fiveHour, true) + win('1w', s.weekly, true);
-    var add = s.additional || [];
-    if (add.length) {
-      body += '<div class=sect><div class=sh>models</div>'
-        + add.map(function (m) {
-            return '<div class=mrow><div class=mname>' + esc(m.label || 'model') + '</div>'
-              + win('5h', m.fiveHour) + win('1w', m.weekly) + '</div>';
-          }).join('') + '</div>';
-    }
-    var extra = '';
-    if (typeof s.resets === 'number') {
-      extra += '<div class=kv><span>limit resets on hand</span><b class="' + (s.resets ? 'gold' : '') + '">' + s.resets + '</b></div>';
-    }
+    body = row('5h', s.fiveHour) + row('1w', s.weekly);
+    var add = (s.additional || []).map(function (m) {
+      var n = shortName(m.label || 'model');
+      return row(n + ' 5h', m.fiveHour, 1) + row(n + ' 1w', m.weekly, 1);
+    }).join('');
+    if (add) body += '<div class=sep></div>' + add;
+
+    var ft = [];
+    if (s.resets) ft.push('<span class=gold>&#8635;<b class=gold>' + s.resets + '</b></span>');
     var x = s.extraUsage;
-    if (x) {
-      extra += '<div class=kv><span>extra usage</span><b>' + (x.isEnabled ? 'on' : 'off') + '</b></div>';
-      if (typeof x.monthlyLimit === 'number') {
-        extra += '<div class=kv><span>credits</span><b>' + (x.usedCredits || 0).toFixed(2) + ' / ' + x.monthlyLimit.toFixed(0) + ' ' + esc(x.currency || '') + '</b></div>';
-      }
+    if (x && typeof x.monthlyLimit === 'number') {
+      ft.push('<span' + (x.isEnabled ? '' : ' style="opacity:.55"') + '>$<b>' + (x.usedCredits || 0).toFixed(0) + '</b>/' + x.monthlyLimit.toFixed(0) + '</span>');
     }
-    (s.warnings || []).forEach(function (w) { extra += '<div class=err>' + esc(w) + '</div>'; });
-    if (extra) body += '<div class=sect>' + extra + '</div>';
+    (s.warnings || []).forEach(function (w) { ft.push('<span class=err>' + esc(w) + '</span>'); });
+    if (s.lastFetch && Date.now() / 1000 - s.lastFetch > 900) ft.push('<span class=err>' + ago(s.lastFetch) + '</span>');
+    if (ft.length) body += '<div class=ft>' + ft.join('') + '</div>';
   }
   var stale = s.lastFetch && Date.now() / 1000 - s.lastFetch > 900;
   return '<div class="card' + (stale ? ' stale' : '') + '">'
-    + '<div class=top><span class=name>' + esc(a.label || a.provider) + '</span>'
-    + (a.tag ? '<span class=tag>' + esc(a.tag) + '</span>' : '')
-    + '<span class=plan>' + esc(ac.orgName || a.provider) + '</span></div>'
-    + (ac.email ? '<div class=mail>' + esc(ac.email) + '</div>' : '')
-    + body
-    + (s.lastFetch ? '<div class=kv style="margin-top:10px;color:var(--faint)"><span>fetched ' + ago(s.lastFetch) + ' ago</span></div>' : '')
-    + '</div>';
+    + '<div class=hd><span class=nm>' + esc(a.label || a.provider) + '</span>'
+    + (a.tag ? '<span class=tg>' + esc(a.tag) + '</span>' : '')
+    + '<span class=pl>' + esc(plan(ac.orgName)) + '</span></div>'
+    + body + '</div>';
 }
 
 function render(d) {
   document.getElementById('grid').innerHTML = (d.accounts || []).map(card).join('');
-  document.getElementById('foot').textContent = d.ts ? 'pushed ' + ago(d.ts) + ' ago' : 'no data yet';
+  document.getElementById('foot').textContent = d.ts ? ago(d.ts) : 'no data';
 }
 
 var tick = function () { return fetch('/u.json', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(render).catch(function () {}); };
