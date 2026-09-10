@@ -61,32 +61,31 @@ const PAGE = `<!doctype html><meta charset=utf-8>
 <style>
 :root{--bg:#111;--card:#171717;--fg:#e5e7eb;--dim:#8b8f96;--faint:#5f636a;--line:#242424;--violet:#a78bfa;--gold:#eab308;--track:#232323}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);font:13px/1.2 ui-monospace,Menlo,monospace;padding:10px}
-#grid{display:grid;gap:8px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));max-width:1100px;margin:0 auto}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.2 ui-monospace,Menlo,monospace;padding:10px}
+#grid{display:grid;gap:8px;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));max-width:1100px;margin:0 auto}
 .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px 10px 7px}
 .hd{display:flex;align-items:baseline;gap:5px;margin-bottom:6px}
-.nm{font-size:15px;font-weight:700;letter-spacing:-.01em}
-.tg{color:var(--violet);font-size:11px;font-weight:700}
-.pl{margin-left:auto;color:var(--faint);font-size:10px}
-.r{display:grid;grid-template-columns:2.4em 1fr 2.1em 2.4em 34px 34px;align-items:center;gap:6px;height:15px}
-.r.s{grid-template-columns:4.6em 1fr 2.1em 2.4em 34px 34px;height:13px;opacity:.9}
-.lg{color:var(--faint);font-size:9px;text-align:center;letter-spacing:.06em}
+.nm{font-size:18px;font-weight:700;letter-spacing:-.01em}
+.tg{color:var(--violet);font-size:13px;font-weight:700}
+.pl{margin-left:auto;color:var(--faint);font-size:11px}
+.r{display:grid;grid-template-columns:4.8em 1fr 2.2em 2.6em 34px 34px;align-items:center;gap:6px;height:19px}
+.r.s{opacity:.92}
+.lg{color:var(--faint);font-size:10px;text-align:center;letter-spacing:.06em}
 .sp{display:block}
-.k{color:var(--dim);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.r.s .k{color:var(--faint);font-size:10px}
+.k{color:var(--dim);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.r.s .k{color:var(--faint);font-size:12px}
 .t{height:7px;background:var(--track);border-radius:2px;overflow:hidden}
-.r.s .t{height:4px}
 .t i{display:block;height:100%;border-radius:2px}
-.v{text-align:right;font-size:13px;font-weight:700;font-variant-numeric:tabular-nums}
-.r.s .v{font-size:11px}
-.z{text-align:right;color:var(--faint);font-size:10px;font-variant-numeric:tabular-nums}
+.v{text-align:right;font-size:15px;font-weight:700;font-variant-numeric:tabular-nums}
+.r.s .v{font-size:13px}
+.z{text-align:right;color:var(--faint);font-size:11px;font-variant-numeric:tabular-nums}
 .sep{height:1px;background:var(--line);margin:5px 0}
-.ft{display:flex;gap:8px;align-items:center;margin-top:6px;font-size:10px;color:var(--faint)}
+.ft{display:flex;gap:8px;align-items:center;margin-top:6px;font-size:12px;color:var(--faint)}
 .ft b{color:var(--fg);font-weight:700}
 .gold{color:var(--gold)}
-.err{color:#EF4444;font-size:11px}
+.err{color:#EF4444;font-size:12px}
 .stale{opacity:.5}
-#foot{max-width:1100px;margin:8px auto 0;color:var(--faint);font-size:10px;text-align:center}
+#foot{max-width:1100px;margin:8px auto 0;color:var(--faint);font-size:11px;text-align:center}
 </style>
 <div id=grid></div><div id=foot></div>
 <script>
