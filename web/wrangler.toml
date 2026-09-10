@@ -1,0 +1,9 @@
+name = "ccusage"
+main = "worker.js"
+compatibility_date = "2026-09-10"
+
+# limits.kirs.online -> this worker (kirs.online must be a zone in the account)
+routes = [{ pattern = "limits.kirs.online", custom_domain = true }]
+
+# npx wrangler kv namespace create ccusage  -> paste the id here
+kv_namespaces = [{ binding = "KV", id = "553285b8f3ad4bdabccca3c5bb747f8c" }]

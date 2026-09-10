@@ -5,6 +5,7 @@ local PREFIX = (...) or "claude_usage"
 local state = require(PREFIX .. ".state")
 local session = require(PREFIX .. ".session")
 local menubar = require(PREFIX .. ".menubar")
+local publish = require(PREFIX .. ".publish")
 
 local accounts = state.accounts()
 
@@ -28,5 +29,6 @@ end
 menubar.accounts = accounts
 menubar.ensureBar()
 for _, acct in ipairs(accounts) do menubar.start(acct) end
+publish.start(menubar)  -- no-op until publish.url + publish.token are set
 
 return menubar
