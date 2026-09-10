@@ -10,8 +10,9 @@ local get, set = state.get, state.set
 local M = {}
 local DIR = os.getenv("HOME") .. "/.hammerspoon/claude_usage"
 local BIN, SRC = DIR .. "/sensors", DIR .. "/sensors.c"
-local TICK = 2
-local BARS = 20            -- 1 px per sample → 40 s of history
+local TICK = 4
+local BARS = 10            -- one 1 px bar + 1 px gap per sample → 40 s of history
+local BAR_W, BAR_GAP = 1, 1
 local hist, temp = {}, nil
 M.onTick = function() end  -- menubar sets this to its redraw
 
@@ -79,13 +80,13 @@ local function loadColor(v)
   return v >= 0.85 and "#EF4444" or v >= 0.7 and "#F97316" or v >= 0.5 and "#F59E0B" or "#10B981"
 end
 
-local COL_W = BARS        -- one column: temperature on top, graph below
+local COL_W = BARS * (BAR_W + BAR_GAP) - BAR_GAP  -- one column: temperature on top, graph below
 local FONT = { name = "Menlo", size = 11 }
 
 -- Draws the sensor column into `canvas` at x, ICON_H tall. Returns width used
 -- (0 when both are off). Temp alone: centered; graph alone: full height;
 -- both: "78°" in the top row, graph in the bottom row, like the account blocks.
--- Graph: 1px bars, each colored by its own load (history stays readable).
+-- Graph: 1px bars with a 1px gap, each colored by its own load.
 function M.draw(canvas, x, h, dark)
   local g, t = M.graphOn(), M.tempOn()
   if not (g or t) then return 0 end
@@ -102,8 +103,9 @@ function M.draw(canvas, x, h, dark)
   if g then
     for i, v in ipairs(hist) do
       local bh = math.max(1, math.floor(v * gh + 0.5))
+      local bx = x + (BARS - #hist + i - 1) * (BAR_W + BAR_GAP)
       canvas:appendElements({ type = "rectangle", action = "fill", fillColor = { hex = loadColor(v) },
-        frame = { x = x + BARS - #hist + i - 1, y = gy + gh - bh, w = 1, h = bh } })
+        frame = { x = bx, y = gy + gh - bh, w = BAR_W, h = bh } })
     end
   end
   return COL_W
