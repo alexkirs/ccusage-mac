@@ -2,11 +2,15 @@
 //
 //   POST /push   X-Token: <TOKEN secret>   body = the Mac's payload  -> KV
 //   GET  /u.json                                                     -> that payload
+//   GET  /h.json                                                     -> bucketed history
 //   GET  /                                                           -> page rendering it
 //
-// One KV key. The Mac only pushes when the numbers change (plus a 10 min
-// heartbeat), so the free tier's 1000 writes/day is never in play.
+// Two KV keys: the last payload and a 7-day sample log. The Mac only pushes
+// when the numbers change (plus a 10 min heartbeat), so the free tier's 1000
+// writes/day is never in play.
 const KEY = 'u';
+const HKEY = 'h';
+const WEEK = 7 * 24 * 3600;
 
 export default {
   async fetch(req, env) {
@@ -14,7 +18,9 @@ export default {
 
     if (req.method === 'POST' && pathname === '/push') {
       if (req.headers.get('x-token') !== env.TOKEN) return new Response('nope', { status: 401 });
-      await env.KV.put(KEY, await req.text());
+      const body = await req.text();
+      await env.KV.put(KEY, body);
+      await appendHistory(env, body);
       return new Response('ok');
     }
 
@@ -30,7 +36,15 @@ export default {
         { headers: { 'content-type': 'image/png', 'cache-control': 'public,max-age=604800' } });
     }
 
-    const data = (await env.KV.get(KEY)) || '{"ts":0,"blocks":[]}';
+    if (pathname === '/h.json') {
+      const hist = JSON.parse((await env.KV.get(HKEY)) || '[]');
+      return new Response(JSON.stringify({
+        day: bucket(hist, 24 * 3600, 900),   // 24h in 15 min steps
+        week: bucket(hist, WEEK, 3600),      // 7d in 1h steps
+      }), { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
+    }
+
+    const data = (await env.KV.get(KEY)) || '{"ts":0,"accounts":[]}';
     if (pathname === '/u.json') {
       return new Response(data, { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
     }
@@ -54,8 +68,10 @@ body{margin:0;background:var(--bg);color:var(--fg);font:13px/1.2 ui-monospace,Me
 .nm{font-size:15px;font-weight:700;letter-spacing:-.01em}
 .tg{color:var(--violet);font-size:11px;font-weight:700}
 .pl{margin-left:auto;color:var(--faint);font-size:10px}
-.r{display:grid;grid-template-columns:2.4em 1fr 2.1em 2.4em;align-items:center;gap:6px;height:15px}
-.r.s{grid-template-columns:4.6em 1fr 2.1em 2.4em;height:13px;opacity:.9}
+.r{display:grid;grid-template-columns:2.4em 1fr 2.1em 2.4em 34px 34px;align-items:center;gap:6px;height:15px}
+.r.s{grid-template-columns:4.6em 1fr 2.1em 2.4em 34px 34px;height:13px;opacity:.9}
+.lg{color:var(--faint);font-size:9px;text-align:center;letter-spacing:.06em}
+.sp{display:block}
 .k{color:var(--dim);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .r.s .k{color:var(--faint);font-size:10px}
 .t{height:7px;background:var(--track);border-radius:2px;overflow:hidden}
@@ -74,6 +90,7 @@ body{margin:0;background:var(--bg);color:var(--fg);font:13px/1.2 ui-monospace,Me
 </style>
 <div id=grid></div><div id=foot></div>
 <script>
+var D = { accounts: [] }, H = { day: {}, week: {} };
 var C = function (u) { return u >= 85 ? '#EF4444' : u >= 70 ? '#F97316' : u >= 50 ? '#F59E0B' : '#10B981'; };
 var esc = function (s) { return String(s).replace(/[&<>"]/g, function (c) { return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]; }); };
 
@@ -92,13 +109,33 @@ var ago = function (t) {
 var shortName = function (n) { return n.length > 8 ? n.split(/[-\s]/).pop() : n; };
 
 // label · bar · percent · reset, one line, columns aligned across every card.
-function row(k, w, sub) {
+function row(id, k, w, sub, disp) {
   if (!w || typeof w.percentUsed !== 'number') return '';
-  var u = w.percentUsed, c = C(u);
-  return '<div class="r' + (sub ? ' s' : '') + '"><span class=k>' + esc(k) + '</span>'
+  var u = w.percentUsed, c = C(u), key = id + '|' + k;
+  return '<div class="r' + (sub ? ' s' : '') + '"><span class=k>' + esc(disp || k) + '</span>'
     + '<span class=t><i style="width:' + u + '%;background:' + c + '"></i></span>'
     + '<span class=v style="color:' + c + '">' + u + '</span>'
-    + '<span class=z>' + (w.resetsAt ? clock(w.resetsAt) : '') + '</span></div>';
+    + '<span class=z>' + (w.resetsAt ? clock(w.resetsAt) : '') + '</span>'
+    + spark(H.day[key], c) + spark(H.week[key], c) + '</div>';
+}
+
+// 34x12 sparkline, drawn in pixel space so the stroke stays even. Leading
+// nulls (before the first sample) are skipped; later gaps were already carried
+// forward server-side.
+var SW_ = 34, SH_ = 12;
+function spark(arr, c) {
+  if (!arr) return '<span class=sp></span>';
+  var pts = [], n = arr.length;
+  for (var i = 0; i < n; i++) {
+    if (arr[i] == null) continue;
+    var x = (n < 2 ? 0 : i / (n - 1)) * (SW_ - 1) + 0.5;
+    var y = SH_ - 1.5 - (Math.max(0, Math.min(100, arr[i])) / 100) * (SH_ - 3);
+    pts.push(x.toFixed(1) + ',' + y.toFixed(1));
+  }
+  if (pts.length < 2) return '<span class=sp></span>';
+  return '<svg class=sp width=' + SW_ + ' height=' + SH_ + ' viewBox="0 0 ' + SW_ + ' ' + SH_ + '">'
+    + '<polyline points="' + pts.join(' ') + '" fill=none stroke="' + c + '" stroke-width=1.2 '
+    + 'stroke-linecap=round stroke-linejoin=round opacity=.85></polyline></svg>';
 }
 
 // Header right side: the plan, when there is one. "a***@gmail.com's
@@ -108,15 +145,21 @@ var plan = function (n) {
   return n.indexOf('***') >= 0 ? '' : n;
 };
 
+// Column titles for the two sparklines, once per card.
+function legend() {
+  return '<div class=r><span></span><span></span><span></span><span></span>'
+    + '<span class=lg>24h</span><span class=lg>7d</span></div>';
+}
+
 function card(a) {
   var s = a.s || {}, ac = s.account || {}, body = '';
   if (s.status !== 'ok') {
     body = '<div class=err>' + esc(s.status === 'needs_login' ? 'needs login' : (s.errorMsg || s.status || 'no data')) + '</div>';
   } else {
-    body = row('5h', s.fiveHour) + row('1w', s.weekly);
+    body = legend() + row(a.id, '5h', s.fiveHour) + row(a.id, '1w', s.weekly);
     var add = (s.additional || []).map(function (m) {
-      var n = shortName(m.label || 'model');
-      return row(n + ' 5h', m.fiveHour, 1) + row(n + ' 1w', m.weekly, 1);
+      var n = m.label || 'model', sn = shortName(n);
+      return row(a.id, n + ' 5h', m.fiveHour, 1, sn + ' 5h') + row(a.id, n + ' 1w', m.weekly, 1, sn + ' 1w');
     }).join('');
     if (add) body += '<div class=sep></div>' + add;
 
@@ -138,20 +181,76 @@ function card(a) {
     + body + '</div>';
 }
 
-function render(d) {
-  document.getElementById('grid').innerHTML = (d.accounts || []).map(card).join('');
-  document.getElementById('foot').textContent = d.ts ? ago(d.ts) : 'no data';
+function render() {
+  document.getElementById('grid').innerHTML = (D.accounts || []).map(card).join('');
+  document.getElementById('foot').textContent = D.ts ? ago(D.ts) : 'no data';
 }
 
-var tick = function () { return fetch('/u.json', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(render).catch(function () {}); };
-tick(); setInterval(tick, 30000);
-document.addEventListener('visibilitychange', function () { document.hidden || tick(); });
+var get = function (u) { return fetch(u, { cache: 'no-store' }).then(function (r) { return r.json(); }); };
+var tick = function () { return get('/u.json').then(function (d) { D = d; render(); }).catch(function () {}); };
+var hist = function () { return get('/h.json').then(function (h) { H = h; render(); }).catch(function () {}); };
+tick(); hist();
+setInterval(tick, 30000);
+setInterval(hist, 300000);
+document.addEventListener('visibilitychange', function () { document.hidden || (tick(), hist()); });
 navigator.serviceWorker && navigator.serviceWorker.register('/sw.js');
 </script>`;
 
 // Installed as a PWA: manifest + a service worker with a fetch handler is what
 // Chrome on Android wants before it offers "Install app" (a WebAPK, own icon,
 // no browser chrome).
+// One sample per push: { t, v: { "<account id>|<row key>": percent } }. Row
+// keys match what the page labels each line with, so a sparkline is looked up
+// by the same string the row already has.
+function seriesOf(payload) {
+  const v = {};
+  for (const a of payload.accounts || []) {
+    const s = a.s || {};
+    if (s.fiveHour) v[a.id + '|5h'] = s.fiveHour.percentUsed;
+    if (s.weekly) v[a.id + '|1w'] = s.weekly.percentUsed;
+    for (const m of s.additional || []) {
+      const n = m.label || 'model';
+      if (m.fiveHour) v[a.id + '|' + n + ' 5h'] = m.fiveHour.percentUsed;
+      if (m.weekly) v[a.id + '|' + n + ' 1w'] = m.weekly.percentUsed;
+    }
+  }
+  return v;
+}
+
+async function appendHistory(env, body) {
+  let payload;
+  try { payload = JSON.parse(body); } catch (e) { return; }
+  const v = seriesOf(payload);
+  if (!Object.keys(v).length) return;
+  const t = payload.ts || Math.floor(Date.now() / 1000);
+  const hist = JSON.parse((await env.KV.get(HKEY)) || '[]');
+  hist.push({ t, v });
+  const from = t - WEEK;
+  await env.KV.put(HKEY, JSON.stringify(hist.filter(p => p.t >= from)));
+}
+
+// Usage is a level, not a rate: a bucket takes the last sample in it, and gaps
+// carry the previous value forward so an unchanged number draws a flat line.
+function bucket(hist, span, step) {
+  const now = Date.now() / 1000, from = now - span, n = Math.ceil(span / step), raw = {};
+  for (const p of hist) {
+    if (p.t < from) continue;
+    const i = Math.min(n - 1, Math.floor((p.t - from) / step));
+    for (const k in p.v) (raw[k] = raw[k] || {})[i] = p.v[k];
+  }
+  const out = {};
+  for (const k in raw) {
+    const arr = new Array(n).fill(null);
+    let last = null;
+    for (let i = 0; i < n; i++) {
+      if (raw[k][i] != null) last = raw[k][i];
+      arr[i] = last;
+    }
+    out[k] = arr;
+  }
+  return out;
+}
+
 const MANIFEST = JSON.stringify({
   name: 'limits',
   short_name: 'limits',
