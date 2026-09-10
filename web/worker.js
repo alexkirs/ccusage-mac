@@ -116,26 +116,41 @@ function row(id, k, w, sub, disp) {
     + '<span class=t><i style="width:' + u + '%;background:' + c + '"></i></span>'
     + '<span class=v style="color:' + c + '">' + u + '</span>'
     + '<span class=z>' + (w.resetsAt ? clock(w.resetsAt) : '') + '</span>'
-    + spark(H.day[key], c) + spark(H.week[key], c) + '</div>';
+    + spark(H.day[key]) + spark(H.week[key]) + '</div>';
 }
 
 // 34x12 sparkline, drawn in pixel space so the stroke stays even. Leading
 // nulls (before the first sample) are skipped; later gaps were already carried
 // forward server-side.
 var SW_ = 34, SH_ = 12;
-function spark(arr, c) {
-  if (!arr) return '<span class=sp></span>';
+function spark(arr) {
+  var blank = '<span class=sp></span>';
+  if (!arr) return blank;
   var pts = [], n = arr.length;
   for (var i = 0; i < n; i++) {
     if (arr[i] == null) continue;
-    var x = (n < 2 ? 0 : i / (n - 1)) * (SW_ - 1) + 0.5;
-    var y = SH_ - 1.5 - (Math.max(0, Math.min(100, arr[i])) / 100) * (SH_ - 3);
-    pts.push(x.toFixed(1) + ',' + y.toFixed(1));
+    var v = Math.max(0, Math.min(100, arr[i]));
+    pts.push({
+      x: ((n < 2 ? 0 : i / (n - 1)) * (SW_ - 1) + 0.5).toFixed(1),
+      y: (SH_ - 1.5 - (v / 100) * (SH_ - 3)).toFixed(1),
+      v: v,
+    });
   }
-  if (pts.length < 2) return '<span class=sp></span>';
-  return '<svg class=sp width=' + SW_ + ' height=' + SH_ + ' viewBox="0 0 ' + SW_ + ' ' + SH_ + '">'
-    + '<polyline points="' + pts.join(' ') + '" fill=none stroke="' + c + '" stroke-width=1.2 '
-    + 'stroke-linecap=round stroke-linejoin=round opacity=.85></polyline></svg>';
+  if (pts.length < 2) return blank;
+  // Same traffic light as the bars: each segment takes the color of the value
+  // it ends on, so the line changes color where the usage crossed a threshold.
+  var runs = [], cur = { c: C(pts[0].v), p: [pts[0]] };
+  for (var j = 1; j < pts.length; j++) {
+    cur.p.push(pts[j]);
+    var col = C(pts[j].v);
+    if (col !== cur.c) { runs.push(cur); cur = { c: col, p: [pts[j]] }; }
+  }
+  runs.push(cur);
+  var body = runs.filter(function (r) { return r.p.length > 1; }).map(function (r) {
+    return '<polyline points="' + r.p.map(function (q) { return q.x + ',' + q.y; }).join(' ')
+      + '" fill=none stroke="' + r.c + '" stroke-width=1.2 stroke-linecap=round stroke-linejoin=round opacity=.9></polyline>';
+  }).join('');
+  return '<svg class=sp width=' + SW_ + ' height=' + SH_ + ' viewBox="0 0 ' + SW_ + ' ' + SH_ + '">' + body + '</svg>';
 }
 
 // Header right side: the plan, when there is one. "a***@gmail.com's
