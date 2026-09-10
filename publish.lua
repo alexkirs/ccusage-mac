@@ -1,11 +1,14 @@
--- Publishes the strip to an HTTP endpoint (web/worker.js on Cloudflare) so a
--- phone can read the same numbers the menubar shows.
+-- Publishes the full parsed state to an HTTP endpoint (web/worker.js on
+-- Cloudflare) so a phone can read everything the menu shows, not just the
+-- strip.
 --
 --   POST <publish.url>  X-Token: <publish.token>
---   { ts, blocks: [ { label, tag, text?, w5h?, w1w?, resetsAt?, resets? } ] }
+--   { ts, accounts: [ { id, provider, label, tag, s } ] }
 --
--- Blocks come from menubar's own instance.blocks(), so account order, hidden
--- accounts, tags and the Spark block follow the strip with no second source.
+-- `s` is the provider's own parsed result minus `raw`/`fetchTiming`: status,
+-- fiveHour, weekly, additional[] (per-model windows), account, extraUsage,
+-- resets, warnings, lastFetch. Accounts come in registry order; hidden ones
+-- have no instance and never appear.
 --
 -- Enable:
 --   hs -c 'require("claude_usage.state").set("publish.url", "https://limits.kirs.online/push")'
@@ -21,21 +24,27 @@ local M = {
 
 local timer, lastSig, lastSent = nil, nil, 0
 
-local function blocks(menubar)
+local SKIP = { raw = true, fetchTiming = true }
+
+-- The page is public: nobody needs the whole address to tell the accounts
+-- apart, the labels already do that.
+local function mask(str)
+  if type(str) ~= "string" then return str end
+  return (str:gsub("([%w._%%+-])[%w._%%+-]*(@[%w.-]+)", "%1***%2"))
+end
+
+local function accounts(menubar)
   local out = {}
   for _, a in ipairs(menubar.accounts) do
     local inst = menubar.instances[a.id]
     if inst then
-      for _, b in ipairs(inst.blocks()) do
-        local win = b.w5h or b.w1w
-        out[#out + 1] = {
-          label = b.label, tag = b.tag, text = b.text,
-          w5h = b.w5h and b.w5h.percentUsed,
-          w1w = b.w1w and b.w1w.percentUsed,
-          resetsAt = win and win.resetsAt,
-          resets = (b.resets or 0) > 0 and b.resets or nil,
-        }
+      local s = {}
+      for k, v in pairs(inst.s) do if not SKIP[k] then s[k] = v end end
+      if s.account then
+        s.account = { email = mask(s.account.email), orgName = mask(s.account.orgName) }
       end
+      out[#out + 1] = { id = a.id, provider = a.provider, label = a.label or inst.provider.label,
+                        tag = a.tag, s = s }
     end
   end
   return out
@@ -43,22 +52,23 @@ end
 
 -- Deterministic fingerprint. hs.json.encode does not promise key order, so the
 -- payload itself is no good for "did anything change".
-local function sig(list)
+local function canon(v)
+  if type(v) ~= "table" then return tostring(v) end
   local parts = {}
-  for _, b in ipairs(list) do
-    parts[#parts + 1] = table.concat({ b.label or "", b.tag or "", b.text or "",
-      b.w5h or "", b.w1w or "", b.resetsAt or "", b.resets or "" }, "|")
-  end
-  return table.concat(parts, "\n")
+  for k, val in pairs(v) do parts[#parts + 1] = tostring(k) .. "=" .. canon(val) end
+  table.sort(parts)
+  return "{" .. table.concat(parts, ",") .. "}"
 end
 
 local function push(menubar)
   local url, token = state.get("publish.url"), state.get("publish.token")
   if not (url and token) then return end
-  local list = blocks(menubar)
-  local s, now = sig(list), os.time()
+  local list = accounts(menubar)
+  -- lastFetch moves every cycle; it alone is not a reason to spend a KV write.
+  local s = canon(list):gsub("lastFetch=%d+", "")
+  local now = os.time()
   if s == lastSig and now - lastSent < M.heartbeat then return end
-  hs.http.doAsyncRequest(url, "POST", hs.json.encode({ ts = now, blocks = list }),
+  hs.http.doAsyncRequest(url, "POST", hs.json.encode({ ts = now, accounts = list }),
     { ["Content-Type"] = "application/json", ["X-Token"] = token },
     function(st, b)
       if st == 200 then lastSig, lastSent = s, now
