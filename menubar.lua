@@ -188,10 +188,11 @@ local function buildBlockIcon(b)
     fh, row1str = "?", b.text
     row1 = seg(b.text, b.text == "…" and NEUTRAL_COLOR or BUCKET_COLOR.danger)
   end
-  -- Untouched 5h window: its clock is noise, so show the weekly reset instead.
-  local resetWin = ((w5h and w5h.percentUsed == 0 and w1w) and w1w) or w5h or w1w
-  -- Bar tracks whichever window the clock counts down, so an untouched 5h
-  -- window does not hide a mostly-spent week.
+  -- The binding window is whichever is further spent: a barely-touched 5h
+  -- window must not hide a week that is nearly gone.
+  local resetWin = w5h or w1w
+  if w5h and w1w and (w1w.percentUsed or 0) > (w5h.percentUsed or 0) then resetWin = w1w end
+  -- Bar tracks the same window the clock counts down.
   local barPct = (not b.text and resetWin and resetWin.percentUsed) or fh
   local row2, row2str
   if b.showReset and not b.text then
