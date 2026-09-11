@@ -18,8 +18,9 @@ local state = require(PREFIX .. ".state")
 local log = state.logger("publish")
 
 local M = {
-  period = 60,      -- how often the payload is rebuilt
-  heartbeat = 600,  -- force a push this often even when nothing changed
+  -- 15 min: every push is a KV write, and the free plan allows 1000 a day.
+  period = 900,      -- how often the payload is rebuilt
+  heartbeat = 3600,  -- force a push this often even when nothing changed
 }
 
 local timer, lastSig, lastSent = nil, nil, 0
