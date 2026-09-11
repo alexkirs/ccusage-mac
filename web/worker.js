@@ -39,7 +39,7 @@ export default {
     if (pathname === '/h.json') {
       const hist = JSON.parse((await env.KV.get(HKEY)) || '[]');
       return new Response(JSON.stringify({
-        day: bucket(hist, 24 * 3600, 900),   // 24h in 15 min steps
+        day: bucket(hist, 24 * 3600, 3600), // 24h in 1h steps, the push period
         week: bucket(hist, WEEK, 3600),      // 7d in 1h steps
       }), { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
     }
