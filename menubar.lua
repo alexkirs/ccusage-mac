@@ -188,7 +188,11 @@ local function buildBlockIcon(b)
     fh, row1str = "?", b.text
     row1 = seg(b.text, b.text == "…" and NEUTRAL_COLOR or BUCKET_COLOR.danger)
   end
-  local resetWin = w5h or w1w
+  -- Untouched 5h window: its clock is noise, so show the weekly reset instead.
+  local resetWin = ((w5h and w5h.percentUsed == 0 and w1w) and w1w) or w5h or w1w
+  -- Bar tracks whichever window the clock counts down, so an untouched 5h
+  -- window does not hide a mostly-spent week.
+  local barPct = (not b.text and resetWin and resetWin.percentUsed) or fh
   local row2, row2str
   if b.showReset and not b.text then
     row2str = (resetWin and resetWin.resetsAt and fmtClock(resetWin.resetsAt)) or "—"
@@ -209,9 +213,9 @@ local function buildBlockIcon(b)
   end
 
   local canvas = hs.canvas.new({ x = 0, y = 0, w = textW, h = ICON_H })
-  local fillW = (type(fh) == "number")
-    and math.floor(math.max(0, math.min(100, fh)) * textW / 100 + 0.5) or 0
-  drawHeader(canvas, b.label, textW, fillW, colorForUsed(fh), b.tag)
+  local fillW = (type(barPct) == "number")
+    and math.floor(math.max(0, math.min(100, barPct)) * textW / 100 + 0.5) or 0
+  drawHeader(canvas, b.label, textW, fillW, colorForUsed(barPct), b.tag)
 
   -- Text rows under the header: two stacked when reset shown, else one centered.
   local top = LABEL_H + BAR_H - 1  -- text frame has ~2px of internal leading

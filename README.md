@@ -3,7 +3,7 @@
 Your AI subscription limits in the macOS menu bar. One strip, one block per account.
 
 <p align="center">
-  <img src="docs/menubar-accounts.png" alt="menu bar: claude · grokb · two codex accounts (one tagged cod2) · 52° + load graph" width="300">
+  <img src="docs/menubar-accounts.png" alt="menu bar: claude · two codex accounts (one tagged cod) · grokb · 76° + load graph" width="300">
 </p>
 
 Each block: **% used** (5-hour · weekly, or just weekly) and **time until reset**
