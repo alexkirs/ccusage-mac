@@ -707,6 +707,9 @@ function M.buildMenu(compact)
   if us.sha then verLine = verLine .. " · " .. us.sha end
   table.insert(items, { title = verLine, disabled = true })
   table.insert(items, { title = "    " .. os.getenv("HOME") .. "/.hammerspoon/claude_usage", disabled = true })
+  -- Unicode has no GitHub mark; \u{F09B} needs a Nerd Font, so use the octopus.
+  table.insert(items, { title = "🐙 GitHub",
+    fn = function() openUrl("https://github.com/alexkirs/ccusage-mac") end })
   table.insert(items, { title = "Quit", fn = function() M.stopAll() end })
   return items
 end
