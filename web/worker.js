@@ -1,16 +1,16 @@
 // Cloudflare Worker behind limits.kirs.online.
 //
-//   POST /push   X-Token: <TOKEN secret>   body = the Mac's payload  -> KV
+//   POST /push   X-Token: <TOKEN secret>   body = the Mac's payload  -> D1
 //   GET  /u.json                                                     -> that payload
 //   GET  /h.json                                                     -> bucketed history
 //   GET  /                                                           -> page rendering it
 //
-// Two KV keys: the last payload and a 7-day sample log. The Mac only pushes
-// when the numbers change (plus a 10 min heartbeat), so the free tier's 1000
-// writes/day is never in play.
-const KEY = 'u';
-const HKEY = 'h';
+// D1, not KV: a push every minute is ~3 rows written, against the free tier's
+// 100k a day, where KV's 1000 daily writes would run out before noon. Two
+// tables — the last payload (one row) and a 7-day sample log, one row per five
+// minute slot so a week of history stays around 2000 rows to scan.
 const WEEK = 7 * 24 * 3600;
+const SLOT = 300;  // history resolution; the graphs bucket by the hour anyway
 
 export default {
   async fetch(req, env) {
@@ -19,8 +19,7 @@ export default {
     if (req.method === 'POST' && pathname === '/push') {
       if (req.headers.get('x-token') !== env.TOKEN) return new Response('nope', { status: 401 });
       const body = await req.text();
-      await env.KV.put(KEY, body);
-      await appendHistory(env, body);
+      await save(env, body);
       return new Response('ok');
     }
 
@@ -37,14 +36,15 @@ export default {
     }
 
     if (pathname === '/h.json') {
-      const hist = JSON.parse((await env.KV.get(HKEY)) || '[]');
+      const hist = await history(env);
       return new Response(JSON.stringify({
-        day: bucket(hist, 24 * 3600, 3600), // 24h in 1h steps, the push period
+        day: bucket(hist, 24 * 3600, 900),   // 24h in 15 min steps
         week: bucket(hist, WEEK, 3600),      // 7d in 1h steps
       }), { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
     }
 
-    const data = (await env.KV.get(KEY)) || '{"ts":0,"accounts":[]}';
+    const row = await env.DB.prepare('SELECT body FROM state WHERE k = ?').bind('u').first();
+    const data = (row && row.body) || '{"ts":0,"accounts":[]}';
     if (pathname === '/u.json') {
       return new Response(data, { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
     }
@@ -228,16 +228,31 @@ function seriesOf(payload) {
   return v;
 }
 
-async function appendHistory(env, body) {
+// One batch per push: the payload, the sample for this five minute slot (a
+// second push in the same slot overwrites it), and the expiry of old samples.
+async function save(env, body) {
   let payload;
-  try { payload = JSON.parse(body); } catch (e) { return; }
-  const v = seriesOf(payload);
-  if (!Object.keys(v).length) return;
-  const t = payload.ts || Math.floor(Date.now() / 1000);
-  const hist = JSON.parse((await env.KV.get(HKEY)) || '[]');
-  hist.push({ t, v });
-  const from = t - WEEK;
-  await env.KV.put(HKEY, JSON.stringify(hist.filter(p => p.t >= from)));
+  try { payload = JSON.parse(body); } catch (e) { payload = null; }
+  const stmts = [
+    env.DB.prepare(`INSERT INTO state (k, body) VALUES ('u', ?1)
+                    ON CONFLICT(k) DO UPDATE SET body = ?1`).bind(body),
+  ];
+  const v = payload && seriesOf(payload);
+  if (v && Object.keys(v).length) {
+    const t = payload.ts || Math.floor(Date.now() / 1000);
+    stmts.push(env.DB.prepare('INSERT OR REPLACE INTO hist (t, v) VALUES (?1, ?2)')
+      .bind(Math.floor(t / SLOT) * SLOT, JSON.stringify(v)));
+    stmts.push(env.DB.prepare('DELETE FROM hist WHERE t < ?1').bind(t - WEEK));
+  }
+  await env.DB.batch(stmts);
+}
+
+// t is the primary key, so the week filter scans only the rows it returns.
+async function history(env) {
+  const from = Math.floor(Date.now() / 1000) - WEEK;
+  const { results } = await env.DB.prepare('SELECT t, v FROM hist WHERE t >= ?1 ORDER BY t')
+    .bind(from).all();
+  return results.map(r => ({ t: r.t, v: JSON.parse(r.v) }));
 }
 
 // Usage is a level, not a rate: a bucket takes the last sample in it, and gaps

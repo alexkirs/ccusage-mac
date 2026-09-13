@@ -5,5 +5,8 @@ compatibility_date = "2026-09-10"
 # limits.kirs.online -> this worker (kirs.online must be a zone in the account)
 routes = [{ pattern = "limits.kirs.online", custom_domain = true }]
 
-# npx wrangler kv namespace create ccusage  -> paste the id here
-kv_namespaces = [{ binding = "KV", id = "553285b8f3ad4bdabccca3c5bb747f8c" }]
+# npx wrangler d1 create ccusage  -> paste the id here, then load schema.sql
+[[d1_databases]]
+binding = "DB"
+database_name = "ccusage"
+database_id = "506fc52e-4185-4fc4-a922-755515813253"
