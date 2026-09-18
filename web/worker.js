@@ -93,12 +93,18 @@ var D = { accounts: [] }, H = { day: {}, week: {} };
 var C = function (u) { return u >= 85 ? '#EF4444' : u >= 70 ? '#F97316' : u >= 50 ? '#F59E0B' : '#10B981'; };
 var esc = function (s) { return String(s).replace(/[&<>"]/g, function (c) { return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]; }); };
 
-// Reset time, shortest form that still reads: 3d / 4h12 / 47m / now.
+// Reset time: 3d / 21h / 4h12 / 47m / now. Minutes only inside the last five
+// hours (the short window's own length); above that whole hours rounded up, so
+// the number never promises more time than is left. Matches the menubar block.
 var clock = function (e) {
   var d = e - Date.now() / 1000;
   if (d <= 0) return 'now';
+  if (d >= 5 * 3600) {
+    var ch = Math.ceil(d / 3600);
+    return ch < 24 ? ch + 'h' : Math.ceil(d / 86400) + 'd';
+  }
   var h = Math.floor(d / 3600), m = Math.floor((d % 3600) / 60);
-  return h >= 24 ? Math.round(h / 24) + 'd' : h ? h + 'h' + (m < 10 ? '0' : '') + m : m + 'm';
+  return h ? h + 'h' + (m < 10 ? '0' : '') + m : m + 'm';
 };
 var ago = function (t) {
   var d = Math.round(Date.now() / 1000 - t);

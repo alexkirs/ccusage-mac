@@ -106,15 +106,22 @@ local function fmtRel(epoch)
   return days .. "d " .. h .. "h"
 end
 
-local function fmtClock(epoch)
+-- Countdown on the block. Minutes only matter inside the last five hours,
+-- which is the length of the short window: below that it reads H:MM, above it
+-- whole hours (then days), rounded up so the number never promises more time
+-- than is left. 20h03m reads "21h", not "20:03".
+local function fmtClock(epoch, now)
   if not epoch then return nil end
-  local d = epoch - os.time()
+  local d = epoch - (now or os.time())
   if d <= 0 then return "0:00" end
-  local h = math.floor(d / 3600)
-  local m = math.floor((d % 3600) / 60)
-  if h >= 24 then return string.format("%dd", math.floor(h / 24 + 0.5)) end
-  return string.format("%d:%02d", h, m)
+  if d < 5 * 3600 then
+    return string.format("%d:%02d", math.floor(d / 3600), math.floor((d % 3600) / 60))
+  end
+  local h = math.ceil(d / 3600)
+  if h < 24 then return h .. "h" end
+  return math.ceil(d / 86400) .. "d"
 end
+M.fmtClock = fmtClock
 
 -- Menubar block image: provider label across the top with a 2px horizontal
 -- usage bar (5h percent) right under it, then two stacked text rows (5h·1w

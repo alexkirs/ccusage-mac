@@ -88,6 +88,17 @@ assert(codex.needsRefresh(now - 3600, now + 100, now) == true)       -- about to
 assert(codex.needsRefresh(nil, now + 999999, now) == false)          -- no auth.json mtime
 assert(codex.needsRefresh(now - 3600, nil, now) == false)            -- unparsable token
 
+-- menubar.fmtClock: H:MM under five hours, whole hours above it, rounded up.
+local fmtClock = require(name .. ".menubar").fmtClock
+local t0 = 1800000000
+assert(fmtClock(t0 + 4 * 3600 + 63, t0) == "4:01")
+assert(fmtClock(t0 + 5 * 3600, t0) == "5h")
+assert(fmtClock(t0 + 20 * 3600 + 180, t0) == "21h")
+assert(fmtClock(t0 + 23 * 3600 + 3600, t0) == "1d")
+assert(fmtClock(t0 + 25 * 3600, t0) == "2d")
+assert(fmtClock(t0 - 1, t0) == "0:00")
+assert(fmtClock(nil, t0) == nil)
+
 -- Real jar parses without throwing (contents not asserted, machine-specific).
 local real = session.readJar()
 assert(type(real) == "table")
