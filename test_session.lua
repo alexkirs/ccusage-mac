@@ -79,6 +79,15 @@ local legacy = claude.mapResponse(usage, nil, {})
 assert(#legacy.additional == 1 and legacy.additional[1].label == "Opus"
        and legacy.additional[1].weekly.percentUsed == 12, hs.inspect(legacy.additional))
 
+-- codex.needsRefresh: daily floor, 5-min expiry window, missing inputs.
+local codex = require(name .. ".codex")
+local now = 1800000000
+assert(codex.needsRefresh(now - 86401, now + 999999, now) == true)   -- token set a day old
+assert(codex.needsRefresh(now - 3600, now + 999999, now) == false)   -- fresh and valid
+assert(codex.needsRefresh(now - 3600, now + 100, now) == true)       -- about to expire
+assert(codex.needsRefresh(nil, now + 999999, now) == false)          -- no auth.json mtime
+assert(codex.needsRefresh(now - 3600, nil, now) == false)            -- unparsable token
+
 -- Real jar parses without throwing (contents not asserted, machine-specific).
 local real = session.readJar()
 assert(type(real) == "table")

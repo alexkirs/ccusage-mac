@@ -61,8 +61,13 @@ end
 
 -- Refresh the access token in place using the account's own refresh_token
 -- (rotates it — safe because this CODEX_HOME is the widget's alone). cb(ok).
+local lastFail = {}   -- home -> time of the last rejected refresh
+
 function M.refreshToken(acct, cb)
   local home = M.homeFor(acct)
+  -- A revoked chain stays revoked until the account is re-added, so back off
+  -- instead of asking the token endpoint again on every fetch.
+  if lastFail[home] and os.time() - lastFail[home] < 900 then return cb(false) end
   local auth = readAuth(home)
   local rt = auth and auth.tokens and auth.tokens.refresh_token
   if not rt then return cb(false) end
@@ -70,8 +75,10 @@ function M.refreshToken(acct, cb)
   session.request("POST", TOKEN_URL, nil, { ["Content-Type"] = "application/json" }, body, function(st, b)
     local j = session.json(b or "")
     if st ~= 200 or not (j and j.access_token) then
+      lastFail[home] = os.time()
       log.w("refresh failed st=" .. tostring(st)); return cb(false)
     end
+    lastFail[home] = nil
     auth.tokens.access_token = j.access_token
     if j.refresh_token then auth.tokens.refresh_token = j.refresh_token end
     if j.id_token then auth.tokens.id_token = j.id_token end
@@ -80,6 +87,13 @@ function M.refreshToken(acct, cb)
     if fh then fh:write(hs.json.encode(auth)); fh:close() end
     cb(true)
   end)
+end
+
+-- True when the token set is older than a day or the access token is about to
+-- expire. mtime is auth.json's, exp the access token's `exp` claim.
+function M.needsRefresh(mtime, exp, now)
+  if mtime and now - mtime > 86400 then return true end
+  return exp ~= nil and exp - now < 300
 end
 
 ---------------------------------------------------------------------
@@ -165,10 +179,13 @@ function M.fetch(acct, cb)
   if not (auth and auth.tokens and auth.tokens.access_token) then
     return cb({ status = "needs_login" })
   end
-  -- Refresh proactively when the access token is within 5 min of expiry, or
-  -- reactively on a 401.
-  local exp = jwtExp(auth.tokens.access_token)
-  local nearExp = exp and (exp - os.time() < 300)
+  -- Refresh when the access token is within 5 min of expiry, when the token
+  -- set is more than a day old, or reactively on a 401. The daily leg matters
+  -- because the access token lives 10 days: refreshing only near expiry left
+  -- the chain untouched that long, and OpenAI had revoked it by then
+  -- (2026-09-17, tight@kirs.online - refresh_token rejected, account dead).
+  local mtime = hs.fs.attributes(M.homeFor(acct) .. "/auth.json", "modification")
+  local nearExp = M.needsRefresh(mtime, jwtExp(auth.tokens.access_token), os.time())
   local function go()
     callUsage(acct, function(parsed)
       if parsed._retry then

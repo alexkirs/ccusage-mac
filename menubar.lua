@@ -521,6 +521,14 @@ local function accountMenu(acct)
     table.insert(items, { title = logoutLabel, fn = function() M.logoutAccount(acct) end })
   elseif (acct.cookie or acct.codexHome) and inst then
     table.insert(items, { title = "Refresh now", fn = refresh })
+    -- A stored session that the service rejected: log in again in place,
+    -- instead of forcing a remove-and-add round trip.
+    if s.status == "needs_login" then
+      table.insert(items, {
+        title = "⚠  Log in again to " .. provider.loginLabel .. "…",
+        fn = function() loginInto(acct, provider, refresh) end,
+      })
+    end
     table.insert(items, { title = "Log out & remove", fn = function() M.logoutAccount(acct) end })
   else
     table.insert(items, {
@@ -531,7 +539,7 @@ local function accountMenu(acct)
 
   table.insert(items, { title = "-" })
   table.insert(items, { title = "Rename…", fn = function()
-    local btn, text = hs.dialog.textPrompt("Account label", "Short label shown on the block (up to 7 chars):", acct.label or "", "OK", "Cancel")
+    local btn, text = hs.dialog.textPrompt("Account label", "Short label shown on the block (up to 7 chars):", acct.label or provider.label, "OK", "Cancel")
     if btn == "OK" then
       acct.label = text ~= "" and text or nil
       M.save()
