@@ -123,6 +123,17 @@ local function fmtClock(epoch, now)
 end
 M.fmtClock = fmtClock
 
+-- Which window's reset the block counts down to: the soonest one that is
+-- actually holding anything back. An untouched 5h pool blocks nothing, so it
+-- never wins; a weekly reset that lands first takes the clock even when the 5h
+-- pool is in use, because the week rolling over refills the 5h pool too.
+function M.resetWindow(w5h, w1w)
+  local blocking = w5h and (w5h.percentUsed or 0) > 0 and w5h or nil
+  if not (blocking and w1w) then return blocking or w1w or w5h end
+  if w1w.resetsAt and blocking.resetsAt and w1w.resetsAt < blocking.resetsAt then return w1w end
+  return blocking
+end
+
 -- Menubar block image: provider label across the top with a 2px horizontal
 -- usage bar (5h percent) right under it, then two stacked text rows (5h·1w
 -- percents, reset clock). Drawn as one canvas image set as the item's icon so
@@ -195,9 +206,7 @@ local function buildBlockIcon(b)
     fh, row1str = "?", b.text
     row1 = seg(b.text, b.text == "…" and NEUTRAL_COLOR or BUCKET_COLOR.danger)
   end
-  -- Clock: the 5h reset is what matters once the 5h pool is in use; an
-  -- untouched one counts down nothing, so fall back to the weekly reset.
-  local resetWin = ((w5h and w5h.percentUsed == 0 and w1w) and w1w) or w5h or w1w
+  local resetWin = M.resetWindow(w5h, w1w)
   -- Bar: the further-spent of the two windows, so a barely-touched 5h pool
   -- does not hide a week that is nearly gone.
   local barWin = w5h or w1w

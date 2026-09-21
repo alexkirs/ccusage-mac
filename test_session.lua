@@ -88,8 +88,19 @@ assert(codex.needsRefresh(now - 3600, now + 100, now) == true)       -- about to
 assert(codex.needsRefresh(nil, now + 999999, now) == false)          -- no auth.json mtime
 assert(codex.needsRefresh(now - 3600, nil, now) == false)            -- unparsable token
 
+-- menubar.resetWindow: soonest window that still blocks anything.
+local menubar = require(name .. ".menubar")
+local w5 = { percentUsed = 40, resetsAt = 1000 }
+local wk = { percentUsed = 70, resetsAt = 5000 }
+assert(menubar.resetWindow(w5, wk) == w5)                                   -- 5h in use, resets first
+assert(menubar.resetWindow(w5, { percentUsed = 70, resetsAt = 500 }).resetsAt == 500)  -- week resets first
+assert(menubar.resetWindow({ percentUsed = 0, resetsAt = 1000 }, wk) == wk) -- untouched 5h blocks nothing
+assert(menubar.resetWindow(nil, wk) == wk)
+assert(menubar.resetWindow(w5, nil) == w5)
+assert(menubar.resetWindow({ percentUsed = 0, resetsAt = 1000 }, nil).resetsAt == 1000)
+
 -- menubar.fmtClock: H:MM under five hours, whole hours above it, rounded up.
-local fmtClock = require(name .. ".menubar").fmtClock
+local fmtClock = menubar.fmtClock
 local t0 = 1800000000
 assert(fmtClock(t0 + 4 * 3600 + 63, t0) == "4:01")
 assert(fmtClock(t0 + 5 * 3600, t0) == "5h")
