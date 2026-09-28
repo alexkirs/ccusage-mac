@@ -223,19 +223,49 @@ end
 
 local ANSI = "\27%[[%d;]*m"
 
+-- Non-blocking instruction window: a warning, numbered steps, a big code.
+-- Closed by finish(); the user can close it too without cancelling the login.
+function M.loginWindow(label, code)
+  local esc = function(t) return (t:gsub("[&<>]", { ["&"] = "&amp;", ["<"] = "&lt;", [">"] = "&gt;" })) end
+  local html = [[<!doctype html><meta charset="utf-8"><style>
+    body{font:15px -apple-system,sans-serif;margin:0;padding:22px 26px;background:#1e1e1e;color:#eee}
+    .warn{background:#5a3b00;border:1px solid #f0a020;color:#ffd27a;border-radius:8px;padding:10px 12px;font-weight:600}
+    ol{padding-left:22px;line-height:1.55} li{margin:6px 0} b{color:#fff}
+    .code{font:700 40px ui-monospace,Menlo,monospace;letter-spacing:4px;text-align:center;
+      background:#000;color:#6cf;border-radius:10px;padding:14px;margin:8px 0;user-select:all}
+    .muted{color:#999;font-size:13px}</style>
+    <div class="warn">⚠️ Important: log in to the <b>right</b> OpenAI account for „]] .. esc(label) .. [[“.</div>
+    <ol>
+      <li>A browser tab opened at <b>auth.openai.com/codex/device</b>.</li>
+      <li>Sign in there with the account this block should show.</li>
+      <li>Paste this code (already in your clipboard, <b>⌘V</b>):
+        <div class="code">]] .. esc(code) .. [[</div></li>
+      <li>Click <b>Continue</b> and allow access.</li>
+      <li>Done. This window closes by itself.</li>
+    </ol>
+    <div class="muted">Only this window’s code works. Closing it does not cancel the login.</div>]]
+  local sf = hs.screen.mainScreen():frame()
+  local w, h = 480, 470
+  return hs.webview.new({ x = sf.x + (sf.w - w) / 2, y = sf.y + (sf.h - h) / 3, w = w, h = h })
+    :windowStyle({ "titled", "closable" }):windowTitle("Codex login: " .. label)
+    :level(hs.drawing.windowLevels.floating):deleteOnClose(true)
+    :html(html):show():bringToFront(true)
+end
+
 -- Runs `codex login --device-auth` in the account's own CODEX_HOME, shows the
 -- one-time code, opens the verification page, and waits for auth.json.
 -- onDone() on success (menubar then adds/starts the account); nothing on abort.
 function M.customLogin(acct, onDone)
   local home = M.homeFor(acct)
   os.execute("mkdir -p '" .. home .. "'")
-  local shown, poller, task, finished = false, nil, nil, false
+  local shown, poller, task, finished, win = false, nil, nil, false, nil
 
   local function finish(ok)
     if finished then return end
     finished = true
     if poller then poller:stop(); poller = nil end
     if task and task:isRunning() then pcall(function() task:terminate() end) end
+    if win then win:delete(); win = nil end
     if ok then
       hs.alert.show("Codex account added", 2)
       if onDone then onDone() end
@@ -252,9 +282,7 @@ function M.customLogin(acct, onDone)
       shown = true
       hs.pasteboard.setContents(code)
       hs.urlevent.openURL("https://auth.openai.com/codex/device")
-      hs.dialog.blockAlert("Codex login for " .. (acct.label or M.label),
-        "A browser opened at auth.openai.com/codex/device.\n\nSign in with the account you want, then enter this one-time code (already copied to your clipboard):\n\n        " .. code ..
-        "\n\nThe window will update on its own once you finish. This can take a few seconds.", "OK")
+      win = M.loginWindow(acct.label or M.label, code)
     end
     return true
   end
