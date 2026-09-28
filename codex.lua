@@ -62,21 +62,30 @@ end
 -- Refresh the access token in place using the account's own refresh_token
 -- (rotates it — safe because this CODEX_HOME is the widget's alone). cb(ok).
 local lastFail = {}   -- home -> time of the last rejected refresh
+local inFlight = {}   -- home -> callbacks waiting on the one refresh in progress
 
 function M.refreshToken(acct, cb)
   local home = M.homeFor(acct)
+  -- The refresh_token is single-use: a second POST with the same one counts as
+  -- reuse and OpenAI invalidates the whole chain. Join the running refresh.
+  if inFlight[home] then table.insert(inFlight[home], cb); return end
   -- A revoked chain stays revoked until the account is re-added, so back off
   -- instead of asking the token endpoint again on every fetch.
   if lastFail[home] and os.time() - lastFail[home] < 900 then return cb(false) end
   local auth = readAuth(home)
   local rt = auth and auth.tokens and auth.tokens.refresh_token
   if not rt then return cb(false) end
+  inFlight[home] = { cb }
+  local function done(ok)
+    local cbs = inFlight[home]; inFlight[home] = nil
+    for _, f in ipairs(cbs) do f(ok) end
+  end
   local body = hs.json.encode({ client_id = CLIENT_ID, grant_type = "refresh_token", refresh_token = rt })
   session.request("POST", TOKEN_URL, nil, { ["Content-Type"] = "application/json" }, body, function(st, b)
     local j = session.json(b or "")
     if st ~= 200 or not (j and j.access_token) then
       lastFail[home] = os.time()
-      log.w("refresh failed st=" .. tostring(st)); return cb(false)
+      log.w("refresh failed st=" .. tostring(st) .. " " .. tostring(b)); return done(false)
     end
     lastFail[home] = nil
     auth.tokens.access_token = j.access_token
@@ -85,7 +94,7 @@ function M.refreshToken(acct, cb)
     auth.last_refresh = os.date("!%Y-%m-%dT%H:%M:%S.000000Z")
     local fh = io.open(home .. "/auth.json", "w")
     if fh then fh:write(hs.json.encode(auth)); fh:close() end
-    cb(true)
+    done(true)
   end)
 end
 
@@ -185,7 +194,8 @@ function M.fetch(acct, cb)
   -- the chain untouched that long, and OpenAI had revoked it by then
   -- (2026-09-17, tight@kirs.online - refresh_token rejected, account dead).
   local mtime = hs.fs.attributes(M.homeFor(acct) .. "/auth.json", "modification")
-  local nearExp = M.needsRefresh(mtime, jwtExp(auth.tokens.access_token), os.time())
+  local exp = jwtExp(auth.tokens.access_token)
+  local now = os.time()
   local function go()
     callUsage(acct, function(parsed)
       if parsed._retry then
@@ -194,10 +204,17 @@ function M.fetch(acct, cb)
         end)
       else
         cb(parsed)
+        -- The daily refresh runs only after a successful call, so the network
+        -- is proven up: a rotation whose response is lost (fetch fired on wake,
+        -- Wi-Fi not back yet) leaves the old refresh_token dead - the likely
+        -- way tight@kirs.online lost its chain twice.
+        if parsed.status == "ok" and M.needsRefresh(mtime, exp, now) then
+          M.refreshToken(acct, function() end)
+        end
       end
     end)
   end
-  if nearExp then M.refreshToken(acct, function() go() end) else go() end
+  if M.needsRefresh(nil, exp, now) then M.refreshToken(acct, function() go() end) else go() end
 end
 
 ---------------------------------------------------------------------
