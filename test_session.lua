@@ -78,6 +78,16 @@ usage.seven_day_opus = { utilization = 12.0, resets_at = "2026-09-14T04:59:59Z" 
 local legacy = claude.mapResponse(usage, nil, {})
 assert(#legacy.additional == 1 and legacy.additional[1].label == "Opus"
        and legacy.additional[1].weekly.percentUsed == 12, hs.inspect(legacy.additional))
+-- Plan without a 5h limit: weekly alone is ok, 5h stays nil.
+local noFive = claude.mapResponse({ five_hour = nil, seven_day = { utilization = 30.0 } }, nil, {})
+assert(noFive.status == "ok" and noFive.fiveHour == nil and noFive.weekly.percentUsed == 30, hs.inspect(noFive))
+-- Fixed keys null: account windows come from unscoped limits[].
+local fromLimits = claude.mapResponse({ limits = {
+  { group = "weekly", percent = 40, resets_at = "2026-09-14T04:59:59Z" },
+  { group = "weekly", percent = 9, scope = { model = { display_name = "Fable" } } },
+} }, nil, {})
+assert(fromLimits.status == "ok" and fromLimits.fiveHour == nil and fromLimits.weekly.percentUsed == 40, hs.inspect(fromLimits))
+assert(claude.mapResponse({}, nil, {}).status == "error")
 
 -- codex.needsRefresh: daily floor, 5-min expiry window, missing inputs.
 local codex = require(name .. ".codex")

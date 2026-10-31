@@ -129,15 +129,27 @@ local function perModel(usage)
   return out
 end
 
+-- Account-wide (unscoped) window of a group out of limits[], for plans whose
+-- fixed five_hour/seven_day keys read null.
+local function accountLimit(usage, group)
+  for _, l in ipairs(type(usage.limits) == "table" and usage.limits or {}) do
+    if l.group == group and not (l.scope and l.scope.model) and type(l.percent) == "number" then
+      return makeWindow({ utilization = l.percent, resets_at = l.resets_at })
+    end
+  end
+end
+
 local function mapResponse(usage, overage, account)
   if type(usage) ~= "table" then
     return { status = "error", errorMsg = "usage response missing or not an object",
              warnings = { "/api/organizations/{uuid}/usage did not return an object" } }
   end
-  local five, weekly = makeWindow(usage.five_hour), makeWindow(usage.seven_day)
-  if not five or not weekly then
-    return { status = "error", errorMsg = "missing five_hour/seven_day fields",
-             warnings = { "API shape changed — expected five_hour.utilization and seven_day.utilization" } }
+  -- Either window may be absent (plans without a 5h limit); show whatever exists.
+  local five = makeWindow(usage.five_hour) or accountLimit(usage, "session")
+  local weekly = makeWindow(usage.seven_day) or accountLimit(usage, "weekly")
+  if not five and not weekly then
+    return { status = "error", errorMsg = "no usable usage window",
+             warnings = { "API shape changed — no five_hour/seven_day utilization and no account limits[]" } }
   end
   return {
     status       = "ok",
