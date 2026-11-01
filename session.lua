@@ -159,7 +159,7 @@ end
 -- cb(status, body, headers). status 0 = transport failure.
 function M.request(method, url, cookie, headers, body, cb)
   headers = headers or {}
-  headers["User-Agent"] = M.UA
+  headers["User-Agent"] = headers["User-Agent"] or M.UA
   if cookie then headers["Cookie"] = cookie end
   hs.http.doAsyncRequest(url, method, body, headers, function(st, b, h)
     cb(st or 0, b or "", h or {})

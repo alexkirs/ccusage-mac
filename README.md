@@ -3,7 +3,7 @@
 Your AI subscription limits in the macOS menu bar. One strip, one block per account.
 
 <p align="center">
-  <img src="docs/menubar-accounts.png" alt="menu bar: claude · two codex accounts (one tagged cod) · 59° + load graph" width="300">
+  <img src="docs/menubar-accounts.png" alt="menu bar: claude (cld) · codex (cod) · codex (cod2) · gemini (agv) · CPU temp + load graph" width="350">
 </p>
 
 Each block: **% used** (5-hour · weekly, or just weekly) and **time until reset**
@@ -16,15 +16,18 @@ Works with:
 |---|---|
 | **Claude** (claude.ai) | 5h and weekly limits, per-model weekly caps, extra usage on/off |
 | **Codex** (chatgpt.com) | weekly limit, Spark per-model limit (via Codex CLI login) |
+| **Gemini** (Google / Antigravity) | 5h / weekly quota windows and per-model limits (via Google OAuth) |
 | **Grok** (grok.com) | SuperGrok weekly pool |
 | **Grok Bot** (cursor.com) | Grok Bot weekly allowance |
 
 Any number of accounts per service. Refreshes every 60 s.
 
 Codex accounts sign in through the [Codex CLI](https://github.com/openai/codex)
-(`codex login --device-auth`), so the `codex` command must be installed. Each
-account gets its own isolated login, independent of whatever your terminal
-`codex` is logged into, so several Codex accounts show side by side.
+(`codex login --device-auth`), so the `codex` command must be installed.
+Gemini accounts sign in with Google OAuth in your browser. Each Codex or Gemini
+account gets its own isolated token chain under `~/.hammerspoon/claude_usage_auth/`,
+independent of whatever your terminal, IDE, or browser is logged into, so
+several accounts per service show side by side.
 Limit-reset credits, when the plan has any, show as a gold count in the
 block's bottom-right corner.
 
@@ -74,7 +77,7 @@ first use.
 
 ## Good to know
 
-- Sessions expire when the site says so (Claude ~30 days, others longer). The block turns into `⚠`; open its submenu and sign in again.
+- Sessions expire when the site says so (Claude ~30 days; Codex and Gemini auto-refresh via OAuth refresh tokens). The block turns into `⚠`; open its submenu and sign in again.
 - Sign-in happens in a normal browser window inside Hammerspoon. Your Safari/Chrome logins are not touched.
 - The widget updates itself from this repo daily (menu → **Updates** to turn that off).
 

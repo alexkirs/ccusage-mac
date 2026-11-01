@@ -98,6 +98,69 @@ assert(codex.needsRefresh(now - 3600, now + 100, now) == true)       -- about to
 assert(codex.needsRefresh(nil, now + 999999, now) == false)          -- no auth.json mtime
 assert(codex.needsRefresh(now - 3600, nil, now) == false)            -- unparsable token
 
+-- gemini: retrieveUserQuotaSummary groups + retrieveUserQuota fallback + exhausted bucket.
+local gemini = require(name .. ".gemini")
+assert(gemini.needsRefresh(now - 3600, now + 100, now) == true)
+assert(gemini.needsRefresh(now - 3600, now + 3600, now) == false)
+
+local gemSummary = {
+  groups = {
+    {
+      displayName = "Gemini 3.1 Pro",
+      buckets = {
+        { window = "5h", remainingFraction = 0.75, resetTime = "2026-11-01T21:00:00Z" },
+        { window = "7d", remainingFraction = 0.60, resetTime = "2026-11-07T00:00:00Z" },
+      },
+    },
+    {
+      displayName = "Gemini Flash",
+      buckets = {
+        { window = "5h", remainingFraction = 0.90, resetTime = "2026-11-01T20:00:00Z" },
+      },
+    },
+    {
+      displayName = "Claude Sonnet 4.5",
+      buckets = {
+        { window = "5h", remainingFraction = 0.20, resetTime = "2026-11-01T19:00:00Z" },
+      },
+    },
+  },
+}
+local gemRes = gemini.mapResponse(gemSummary, nil, { paidTier = { name = "Google AI Pro" } }, "me@gmail.com", nil, 1793550000)
+assert(gemRes.status == "ok", gemRes.errorMsg)
+assert(gemRes.fiveHour.percentUsed == 25 and gemRes.fiveHour.percentLeft == 75)
+assert(gemRes.weekly.percentUsed == 40 and gemRes.weekly.percentLeft == 60)
+assert(#gemRes.additional == 3 and gemRes.additional[1].label == "Gemini 3.1 Pro")
+assert(gemRes.account.email == "me@gmail.com" and gemRes.account.orgName == "Google AI Pro")
+
+-- Fallback to retrieveUserQuota buckets + proto3 omitted remainingFraction (= 0 / 100% used).
+local gemQuota = {
+  buckets = {
+    { modelId = "gemini-2.5-pro", tokenType = "REQUESTS", resetTime = "2026-11-01T21:00:00Z" }, -- 0 remaining -> 100% used
+    { modelId = "gemini-2.5-flash", tokenType = "REQUESTS", remainingFraction = 0.80, resetTime = "2026-11-01T21:00:00Z" },
+  },
+}
+local gemFallback = gemini.mapResponse(nil, gemQuota, { currentTier = { name = "Standard" } }, "dev@gmail.com", nil, 1793550000)
+assert(gemFallback.status == "ok", gemFallback.errorMsg)
+assert(gemFallback.fiveHour.percentUsed == 100 and gemFallback.weekly == nil)
+assert(#gemFallback.additional == 2 and gemFallback.additional[1].label == "Gemini 2.5 Pro")
+
+-- Fallback to fetchAvailableModels + loadCodeAssistFromLicenses.
+local licCA = gemini.loadCodeAssistFromLicenses({ licenses = { { tierId = "g1-pro-tier", tierName = "Google AI Pro" } } })
+assert(licCA.currentTier.id == "g1-pro-tier" and licCA.currentTier.name == "Google AI Pro")
+local gemModels = {
+  models = {
+    ["gemini-2.5-pro"] = {
+      displayName = "Gemini 2.5 Pro",
+      quotaInfo = { remainingFraction = 0.65, resetTime = "2026-11-01T21:00:00Z" },
+    },
+  },
+}
+local gemFromModels = gemini.mapResponse(nil, nil, licCA, "pro@gmail.com", gemModels, 1793550000)
+assert(gemFromModels.status == "ok", gemFromModels.errorMsg)
+assert(gemFromModels.fiveHour.percentUsed == 35 and gemFromModels.fiveHour.percentLeft == 65)
+assert(gemFromModels.account.orgName == "Google AI Pro")
+
 -- menubar.resetWindow: soonest window that still blocks anything.
 local menubar = require(name .. ".menubar")
 local w5 = { percentUsed = 40, resetsAt = 1000 }

@@ -10,12 +10,13 @@ local M = {}
 M.VERSION = "0.4.0"
 M.PREFIX = PREFIX
 M.PROVIDERS = {
-  claude = require(PREFIX .. ".claude"),
-  codex  = require(PREFIX .. ".codex"),
-  grok   = require(PREFIX .. ".grok"),
+  claude  = require(PREFIX .. ".claude"),
+  codex   = require(PREFIX .. ".codex"),
+  gemini  = require(PREFIX .. ".gemini"),
+  grok    = require(PREFIX .. ".grok"),
   grokbot = require(PREFIX .. ".grokbot"),
 }
-M.PROVIDER_ORDER = { "claude", "codex", "grok", "grokbot" }
+M.PROVIDER_ORDER = { "claude", "codex", "gemini", "grok", "grokbot" }
 M.instances = {}            -- keyed by account id
 M.accounts = {}             -- registry (list), persisted via state.saveAccounts
 M._updaterStarted = false
@@ -611,7 +612,7 @@ local function debugMenu()
       end },
     { title = "Reload module (hot)", fn = function()
         M.stopAll()
-        for _, mod in ipairs({ "", ".menubar", ".session", ".login", ".claude", ".codex", ".grok", ".grokbot", ".state", ".updater" }) do
+        for _, mod in ipairs({ "", ".menubar", ".session", ".login", ".claude", ".codex", ".gemini", ".grok", ".grokbot", ".state", ".updater" }) do
           package.loaded[PREFIX .. mod] = nil
         end
         require(PREFIX)
