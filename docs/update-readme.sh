@@ -63,8 +63,8 @@ local readme = fh:read('a')
 fh:close()
 
 local updated, n = readme:gsub(
-  '<img src=\"docs/menubar%-accounts%.png\"[^>]*>',
-  string.format('<img src=\"docs/menubar-accounts.png\" alt=\"%s\" width=\"%d\">', alt, displayW),
+  '<img src=\"docs/menubar%-accounts%.png[^\"]*\"[^>]*>',
+  string.format('<img src=\"docs/menubar-accounts.png?v=%d\" alt=\"%s\" width=\"%d\">', os.time(), alt, displayW),
   1
 )
 if n > 0 and updated ~= readme then
