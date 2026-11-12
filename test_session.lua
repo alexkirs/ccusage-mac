@@ -88,6 +88,11 @@ local fromLimits = claude.mapResponse({ limits = {
 } }, nil, {})
 assert(fromLimits.status == "ok" and fromLimits.fiveHour == nil and fromLimits.weekly.percentUsed == 40, hs.inspect(fromLimits))
 assert(claude.mapResponse({}, nil, {}).status == "error")
+-- Limit resets: resets_left summed over cedar_ember grants; nil when absent.
+fromLimits = claude.mapResponse({ seven_day = { utilization = 1 }, cedar_ember = { grants = {
+  { resets_left = 1 }, { resets_left = 2 }, { resets_left = 0 } } } }, nil, {})
+assert(fromLimits.resets == 3, hs.inspect(fromLimits))
+assert(noFive.resets == nil)
 
 -- codex.needsRefresh: daily floor, 5-min expiry window, missing inputs.
 local codex = require(name .. ".codex")

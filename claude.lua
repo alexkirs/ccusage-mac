@@ -7,6 +7,8 @@
 --       The fixed seven_day_<model> keys now read null; per-model caps live in
 --       limits[] as entries with a scope.model, so whatever models the account
 --       has (Fable, Opus, ..) are picked up without a code change.
+--       ?cedar_ember=1 adds cedar_ember.grants[{resets_left,..}]: limit-reset
+--       grants the user can spend (summed into `resets`, like Codex).
 --   GET /api/organizations/{orgUuid}/overage_spend_limit
 --       → { is_enabled, monthly_credit_limit, used_credits, currency }
 --
@@ -139,6 +141,16 @@ local function accountLimit(usage, group)
   end
 end
 
+-- Limit resets on hand: sum of resets_left over cedar_ember grants.
+local function resetsLeft(usage)
+  local ce = type(usage.cedar_ember) == "table" and usage.cedar_ember or {}
+  local n
+  for _, g in ipairs(type(ce.grants) == "table" and ce.grants or {}) do
+    if tonumber(g.resets_left) then n = (n or 0) + g.resets_left end
+  end
+  return n
+end
+
 local function mapResponse(usage, overage, account)
   if type(usage) ~= "table" then
     return { status = "error", errorMsg = "usage response missing or not an object",
@@ -156,6 +168,7 @@ local function mapResponse(usage, overage, account)
     fiveHour     = five,
     weekly       = weekly,
     additional   = perModel(usage),
+    resets       = resetsLeft(usage),
     account      = account,
     extraUsage   = mapOverage(overage),
     warnings     = {},
@@ -193,7 +206,7 @@ function M.fetch(acct, cb)
       pending = pending - 1
       if pending == 0 then cb(mapResponse(usage, overage, info)) end
     end
-    session.get(orgBase(org.uuid) .. "/usage", acct.cookie, nil, function(s, b)
+    session.get(orgBase(org.uuid) .. "/usage?cedar_ember=1", acct.cookie, nil, function(s, b)
       usage = s == 200 and session.json(b) or nil; done()
     end)
     session.get(orgBase(org.uuid) .. "/overage_spend_limit", acct.cookie, nil, function(s, b)
